@@ -11,10 +11,10 @@ between them.
 
 ## Scripts
 
-| command | does |
-| --- | --- |
-| `npm run bundle` | build every source and write `bundles/` |
-| `npm run serve` | build and serve locally on port 8080 |
-| `npm run conformance` | typecheck, lint and format checks |
-| `npm test` | run the source tests |
-| `npm run logcat` | stream device logs |
+| command               | does                                    |
+| --------------------- | --------------------------------------- |
+| `npm run bundle`      | build every source and write `bundles/` |
+| `npm run serve`       | build and serve locally on port 8080    |
+| `npm run conformance` | typecheck, lint and format checks       |
+| `npm test`            | run the source tests                    |
+| `npm run logcat`      | stream device logs                      |
