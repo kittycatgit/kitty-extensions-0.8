@@ -758,7 +758,7 @@ var _Sources = (() => {
     { id: "new_series", title: "New Series", type: import_types.HomeSectionType.singleRowNormal, order: "date" }
   ];
   var RawkumaInfo = {
-    version: "3.0.0",
+    version: "4.0.0",
     name: "Rawkuma",
     icon: "icon.png",
     author: "kittycatgit",
@@ -807,6 +807,10 @@ var _Sources = (() => {
         1
       );
       return typeof response.data === "string" ? response.data : String(response.data ?? "");
+    }
+    // Cards elsewhere serve a 96px crop; the original is the same name without it.
+    fullSize(url) {
+      return url.replace(/-\d+x\d+(\.[a-z]{3,4})$/i, "$1");
     }
     decode(value) {
       return value.replace(/<[^>]+>/g, "").replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code))).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").trim();
@@ -878,7 +882,9 @@ var _Sources = (() => {
           App.createPartialSourceManga({
             mangaId: slug,
             title: this.decode(row.title?.rendered ?? slug),
-            image: row._embedded?.["wp:featuredmedia"]?.[0]?.source_url ?? `${DOMAIN}/favicon.ico`
+            image: this.fullSize(
+              row._embedded?.["wp:featuredmedia"]?.[0]?.source_url ?? `${DOMAIN}/favicon.ico`
+            )
           })
         );
       }
@@ -906,7 +912,7 @@ var _Sources = (() => {
           App.createPartialSourceManga({
             mangaId: slug,
             title: this.decode(name),
-            image: (image.attr("src") ?? "").trim() || `${DOMAIN}/favicon.ico`
+            image: this.fullSize((image.attr("src") ?? "").trim()) || `${DOMAIN}/favicon.ico`
           })
         );
       }
@@ -990,7 +996,7 @@ var _Sources = (() => {
             this.decode(book.name ?? mangaId),
             ...book.alternateName ? [this.decode(book.alternateName)] : []
           ],
-          image: book.image?.url ?? `${DOMAIN}/favicon.ico`,
+          image: this.fullSize(book.image?.url ?? `${DOMAIN}/favicon.ico`),
           desc: this.decode(book.description ?? ""),
           status: book.creativeWorkStatus ?? (book.isCompleted ? "Completed" : "Ongoing"),
           ...book.author?.name ? { author: book.author.name } : {},
@@ -1032,16 +1038,18 @@ var _Sources = (() => {
     }
     async getChapterDetails(mangaId, chapterId) {
       const $ = this.cheerio.load(await this.fetch(`${DOMAIN}/manga/${mangaId}/${chapterId}/`));
-      const pages = [];
+      const found = /* @__PURE__ */ new Map();
       for (const element of $("img").toArray()) {
         const src = ($(element).attr("src") ?? "").trim();
-        if (src.includes("rcdn.") && !pages.includes(src)) {
-          pages.push(src);
+        const number = /\/(\d+)\.(?:jpg|jpeg|png|webp|avif)$/i.exec(src)?.[1];
+        if (number !== void 0 && !found.has(Number(number))) {
+          found.set(Number(number), src);
         }
       }
-      if (pages.length === 0) {
+      if (found.size === 0) {
         throw new Error(`No pages were found for ${chapterId}.`);
       }
+      const pages = [...found.entries()].sort((left, right) => left[0] - right[0]).map(([, url]) => url);
       return App.createChapterDetails({ id: chapterId, mangaId, pages });
     }
   };
