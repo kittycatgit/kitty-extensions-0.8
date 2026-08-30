@@ -9,7 +9,7 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "conformance": "npm run tsc && npm run lint:check && npm run format:check",
-    "bundle": "paperback bundle",
+    "bundle": "paperback bundle && node tools/homepage.mjs",
     "serve": "paperback serve",
     "logcat": "paperback logcat",
     "test": "paperback test"
@@ -21,5 +21,6 @@
     "oxlint": "^1.78.0",
     "typescript": "^5.9.2"
   },
-  "repositoryName": "kittycatgit Extensions (0.8)"
+  "repositoryName": "kittycatgit Extensions (0.8)",
+  "baseURL": "https://kittycatgit.github.io/kitty-extensions-0.8"
 }
