@@ -758,7 +758,7 @@ var _Sources = (() => {
     { id: "new_series", title: "New Series", type: import_types.HomeSectionType.singleRowNormal, order: "date" }
   ];
   var RawkumaInfo = {
-    version: "4.0.0",
+    version: "5.0.0",
     name: "Rawkuma",
     icon: "icon.png",
     author: "kittycatgit",
@@ -1037,19 +1037,13 @@ var _Sources = (() => {
       );
     }
     async getChapterDetails(mangaId, chapterId) {
-      const $ = this.cheerio.load(await this.fetch(`${DOMAIN}/manga/${mangaId}/${chapterId}/`));
-      const found = /* @__PURE__ */ new Map();
-      for (const element of $("img").toArray()) {
-        const src = ($(element).attr("src") ?? "").trim();
-        const number = /\/(\d+)\.(?:jpg|jpeg|png|webp|avif)$/i.exec(src)?.[1];
-        if (number !== void 0 && !found.has(Number(number))) {
-          found.set(Number(number), src);
-        }
-      }
-      if (found.size === 0) {
+      const postId = chapterId.replace(/^chapter-/, "").split(".").pop() ?? "";
+      const chapter = JSON.parse(await this.fetch(`${API}/chapter/${postId}`));
+      const $ = this.cheerio.load(chapter.content?.rendered ?? "");
+      const pages = $("img").toArray().map((element) => ($(element).attr("src") ?? "").trim()).filter((src) => src.length > 0);
+      if (pages.length === 0) {
         throw new Error(`No pages were found for ${chapterId}.`);
       }
-      const pages = [...found.entries()].sort((left, right) => left[0] - right[0]).map(([, url]) => url);
       return App.createChapterDetails({ id: chapterId, mangaId, pages });
     }
   };
