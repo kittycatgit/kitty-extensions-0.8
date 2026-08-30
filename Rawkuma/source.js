@@ -758,7 +758,7 @@ var _Sources = (() => {
     { id: "new_series", title: "New Series", type: import_types.HomeSectionType.singleRowNormal, order: "date" }
   ];
   var RawkumaInfo = {
-    version: "2.0.0",
+    version: "3.0.0",
     name: "Rawkuma",
     icon: "icon.png",
     author: "kittycatgit",
@@ -810,6 +810,22 @@ var _Sources = (() => {
     }
     decode(value) {
       return value.replace(/<[^>]+>/g, "").replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code))).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").trim();
+    }
+    ago(text) {
+      const match = /(\d+)\s*(second|minute|hour|day|week|month|year)/i.exec(text);
+      if (!match) {
+        return void 0;
+      }
+      const spans = {
+        second: 1e3,
+        minute: 6e4,
+        hour: 36e5,
+        day: 864e5,
+        week: 6048e5,
+        month: 26298e5,
+        year: 315576e5
+      };
+      return new Date(Date.now() - Number(match[1]) * (spans[(match[2] ?? "").toLowerCase()] ?? 0));
     }
     catalogueUrl(options) {
       const parts = [`per_page=${PAGE_SIZE}`, `page=${options.page}`, "_embed=wp:featuredmedia"];
@@ -998,7 +1014,9 @@ var _Sources = (() => {
         rows.push({
           id,
           chapNum: Number(id.replace(/^chapter-/, "").replace(/\.[^.]*$/, "")) || 0,
-          name: this.decode($(element).text())
+          // The label and the date collapse into one string ("Chapter 1766 days
+          // ago"), so the date is read from its own element.
+          time: this.ago($(element).find("time").first().text())
         });
       }
       rows.sort((left, right) => right.chapNum - left.chapNum);
@@ -1007,8 +1025,8 @@ var _Sources = (() => {
           id: row.id,
           chapNum: row.chapNum,
           langCode: "ja",
-          name: row.name,
-          sortingIndex: rows.length - index
+          sortingIndex: rows.length - index,
+          ...row.time ? { time: row.time } : {}
         })
       );
     }
