@@ -20,34 +20,50 @@ import {
 } from "@paperback/types";
 
 const DOMAIN = "https://rawkuma.net";
-
-/**
- * The site's own WordPress API.
- *
- * The catalogue pages rendered for a browser hold a few dozen titles and ignore
- * `?page=` entirely - asking for pages one, two and three returns the same rows.
- * The API behind them answers with the whole library, pages honestly, and states
- * how many pages there are, so browsing and searching are read from here rather
- * than scraped.
- */
 const API = `${DOMAIN}/wp-json/wp/v2`;
-
-/** The most the API will return at once, whatever is asked for. */
 const PAGE_SIZE = 30;
 
-/**
- * The sections the site puts on its own front page, in its own order.
- *
- * These are read out of the homepage rather than invented, so the rows here are
- * the rows a reader sees on the site. They are not paged: the page holds one
- * batch of each and offers no way to ask for more.
- */
+// The rendered catalogue ignores ?page= entirely, so browsing goes through the API.
 const HOME_SECTIONS = [
-  { id: "popular_today", title: "Popular Today", type: HomeSectionType.singleRowLarge },
-  { id: "latest_update", title: "Latest Update", type: HomeSectionType.singleRowNormal },
-  { id: "top_series", title: "Top Series", type: HomeSectionType.singleRowNormal },
-  { id: "new_series", title: "New Series", type: HomeSectionType.singleRowNormal },
+  {
+    id: "popular_today",
+    title: "Popular Today",
+    type: HomeSectionType.singleRowLarge,
+    order: undefined,
+  },
+  {
+    id: "latest_update",
+    title: "Latest Update",
+    type: HomeSectionType.singleRowNormal,
+    order: "modified",
+  },
+  {
+    id: "top_series",
+    title: "Top Series",
+    type: HomeSectionType.singleRowNormal,
+    order: undefined,
+  },
+  { id: "new_series", title: "New Series", type: HomeSectionType.singleRowNormal, order: "date" },
 ] as const;
+
+interface ApiManga {
+  slug?: string;
+  title?: { rendered?: string };
+  _embedded?: { "wp:featuredmedia"?: { source_url?: string }[] };
+}
+
+interface Book {
+  name?: string;
+  alternateName?: string;
+  description?: string;
+  image?: { url?: string };
+  author?: { name?: string };
+  illustrator?: { name?: string };
+  genre?: string[];
+  creativeWorkStatus?: string;
+  isCompleted?: boolean;
+  aggregateRating?: { ratingValue?: number | string };
+}
 
 export const RawkumaInfo: SourceInfo = {
   version: "1.0.0",
@@ -91,11 +107,6 @@ export class Rawkuma
     },
   });
 
-  /**
-   * The site sits behind Cloudflare, which challenges a native client where it
-   * waves a browser through. Handing the app the site root lets it solve the
-   * challenge in a webview and keep the cookies for later requests.
-   */
   async getCloudflareBypassRequestAsync(): Promise<Request> {
     return App.createRequest({
       url: DOMAIN,
@@ -120,38 +131,6 @@ export class Rawkuma
     return typeof response.data === "string" ? response.data : String(response.data ?? "");
   }
 
-  private async json<T>(url: string): Promise<T> {
-    return JSON.parse(await this.fetch(url)) as T;
-  }
-
-  /**
-   * A catalogue row as the API describes it.
-   *
-   * The cover is asked for in the same call rather than fetched per title: the
-   * API will embed it, and a request per row would be a request per row.
-   */
-  private toTile(entry: {
-    slug?: string;
-    title?: { rendered?: string };
-    _embedded?: { "wp:featuredmedia"?: { source_url?: string }[] };
-  }): PartialSourceManga | undefined {
-    const slug = (entry.slug ?? "").trim();
-
-    if (!slug || slug === "feed") {
-      // `/manga/feed/` is WordPress' own RSS endpoint, not a title.
-      return undefined;
-    }
-
-    const media = entry._embedded?.["wp:featuredmedia"]?.[0]?.source_url ?? "";
-
-    return App.createPartialSourceManga({
-      mangaId: slug,
-      title: this.decode(entry.title?.rendered ?? slug),
-      image: media || `${DOMAIN}/favicon.ico`,
-    });
-  }
-
-  /** WordPress renders titles with HTML entities in them. */
   private decode(value: string): string {
     return value
       .replace(/<[^>]+>/g, "")
@@ -165,43 +144,63 @@ export class Rawkuma
       .trim();
   }
 
-  /**
-   * The titles a homepage section holds.
-   *
-   * The page is one document with the sections laid out in order, so a section
-   * is the run of markup between its own heading and the next one. Cards are
-   * found by their link rather than by class: the theme's classes are utility
-   * ones that change with the layout, while the link to a title does not.
-   */
-  private sectionTiles(
-    html: string,
-    title: string,
-    nextTitle: string | undefined,
-  ): PartialSourceManga[] {
+  private catalogueUrl(page: number, orderBy?: string, search?: string): string {
+    const parts = [`per_page=${PAGE_SIZE}`, `page=${page}`, "_embed=wp:featuredmedia"];
+
+    if (orderBy) {
+      parts.push(`orderby=${orderBy}`, "order=desc");
+    }
+
+    if (search) {
+      parts.push(`search=${encodeURIComponent(search)}`);
+    }
+
+    return `${API}/manga?${parts.join("&")}`;
+  }
+
+  private async catalogue(url: string): Promise<PagedResults> {
+    const rows = JSON.parse(await this.fetch(url)) as ApiManga[];
+    const results: PartialSourceManga[] = [];
+
+    for (const row of rows) {
+      const slug = (row.slug ?? "").trim();
+
+      // /manga/feed/ is WordPress' RSS endpoint, not a title.
+      if (!slug || slug === "feed") {
+        continue;
+      }
+
+      results.push(
+        App.createPartialSourceManga({
+          mangaId: slug,
+          title: this.decode(row.title?.rendered ?? slug),
+          image: row._embedded?.["wp:featuredmedia"]?.[0]?.source_url ?? `${DOMAIN}/favicon.ico`,
+        }),
+      );
+    }
+
+    return App.createPagedResults({ results });
+  }
+
+  private sectionTiles(html: string, title: string, next?: string): PartialSourceManga[] {
     const start = html.indexOf(title);
 
     if (start < 0) {
       return [];
     }
 
-    const after = nextTitle ? html.indexOf(nextTitle, start + title.length) : -1;
-    const block = html.slice(start, after > 0 ? after : undefined);
-    const $ = this.cheerio.load(block);
+    const end = next ? html.indexOf(next, start + title.length) : -1;
+    const $ = this.cheerio.load(html.slice(start, end > 0 ? end : undefined));
     const tiles: PartialSourceManga[] = [];
     const seen = new Set<string>();
 
     for (const element of $('a[href*="/manga/"]').toArray()) {
       const href = ($(element).attr("href") ?? "").trim();
       const slug = /\/manga\/([a-z0-9-]+)\/?$/.exec(href)?.[1] ?? "";
-
-      if (!slug || slug === "feed" || seen.has(slug)) {
-        continue;
-      }
-
       const image = $(element).find("img").first();
       const name = (image.attr("alt") ?? "").trim();
 
-      if (!name) {
+      if (!slug || slug === "feed" || !name || seen.has(slug)) {
         continue;
       }
 
@@ -219,15 +218,13 @@ export class Rawkuma
   }
 
   async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
-    // The rows are handed over empty first so the app can draw them, then filled
-    // from the one page they all come from.
     for (const entry of HOME_SECTIONS) {
       sectionCallback(
         App.createHomeSection({
           id: entry.id,
           title: entry.title,
           type: entry.type,
-          containsMoreItems: false,
+          containsMoreItems: entry.order !== undefined,
         }),
       );
     }
@@ -240,44 +237,63 @@ export class Rawkuma
           id: entry.id,
           title: entry.title,
           type: entry.type,
-          containsMoreItems: false,
+          containsMoreItems: entry.order !== undefined,
           items: this.sectionTiles(html, entry.title, HOME_SECTIONS[index + 1]?.title),
         }),
       );
     }
   }
 
-  /**
-   * The homepage rows are what the site itself shows and offer no more than
-   * that, so there is nothing further to hand over.
-   */
-  async getViewMoreItems(_homepageSectionId: string, _metadata: unknown): Promise<PagedResults> {
-    return App.createPagedResults({ results: [] });
+  async getViewMoreItems(homepageSectionId: string, metadata: unknown): Promise<PagedResults> {
+    const entry = HOME_SECTIONS.find((row) => row.id === homepageSectionId);
+
+    // The API can order by date and modification, but has no notion of popularity.
+    if (!entry?.order) {
+      return App.createPagedResults({ results: [] });
+    }
+
+    const page = (metadata as { page?: number } | undefined)?.page ?? 1;
+    const results = await this.catalogue(this.catalogueUrl(page, entry.order));
+
+    return App.createPagedResults({
+      results: results.results,
+      metadata: (results.results?.length ?? 0) < PAGE_SIZE ? undefined : { page: page + 1 },
+    });
   }
 
   async getSearchResults(query: SearchRequest, metadata: unknown): Promise<PagedResults> {
     const page = (metadata as { page?: number } | undefined)?.page ?? 1;
-    const title = (query.title ?? "").trim();
-    const url =
-      `${API}/manga?per_page=${PAGE_SIZE}&page=${page}&_embed=wp:featuredmedia` +
-      (title ? `&search=${encodeURIComponent(title)}` : "");
-
-    const rows = await this.json<Parameters<Rawkuma["toTile"]>[0][]>(url);
-    const results = rows
-      .map((row) => this.toTile(row))
-      .filter((tile): tile is PartialSourceManga => tile !== undefined);
+    const results = await this.catalogue(
+      this.catalogueUrl(page, undefined, (query.title ?? "").trim() || undefined),
+    );
 
     return App.createPagedResults({
-      results,
-      // A short page is the last one; the API answers an over-run page with an
-      // error rather than an empty list, so asking again would fail loudly.
-      metadata: results.length < PAGE_SIZE ? undefined : { page: page + 1 },
+      results: results.results,
+      metadata: (results.results?.length ?? 0) < PAGE_SIZE ? undefined : { page: page + 1 },
     });
   }
 
+  private book(html: string): Book {
+    for (const match of html.matchAll(
+      /<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi,
+    )) {
+      try {
+        const parsed = JSON.parse(match[1] ?? "") as Record<string, unknown>;
+        const type = parsed["@type"];
+
+        if (type === "Book" || (Array.isArray(type) && type.includes("Book"))) {
+          return parsed as Book;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return {};
+  }
+
   async getMangaDetails(mangaId: string): Promise<SourceManga> {
-    const html = await this.fetch(this.getMangaShareUrl(mangaId));
-    const book = this.book(html);
+    const book = this.book(await this.fetch(this.getMangaShareUrl(mangaId)));
     const genres = (book.genre ?? []).map((name) =>
       App.createTag({ id: name.toLowerCase(), label: name }),
     );
@@ -304,52 +320,13 @@ export class Rawkuma
     });
   }
 
-  /**
-   * The series' own description, as the page states it for search engines.
-   *
-   * Taken from the page's structured data rather than its markup: the theme is
-   * built from utility classes that carry no meaning, while this block names
-   * every field it holds.
-   */
-  private book(html: string): {
-    name?: string;
-    alternateName?: string;
-    description?: string;
-    image?: { url?: string };
-    author?: { name?: string };
-    illustrator?: { name?: string };
-    genre?: string[];
-    creativeWorkStatus?: string;
-    isCompleted?: boolean;
-    aggregateRating?: { ratingValue?: number | string };
-  } {
-    for (const match of html.matchAll(
-      /<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi,
-    )) {
-      try {
-        const parsed = JSON.parse(match[1] ?? "") as Record<string, unknown>;
-        const type = parsed["@type"];
-        const isBook = type === "Book" || (Array.isArray(type) && type.includes("Book"));
-
-        if (isBook) {
-          return parsed as ReturnType<Rawkuma["book"]>;
-        }
-      } catch {
-        // A block that will not parse is not the one wanted.
-      }
-    }
-
-    return {};
-  }
-
   async getChapters(mangaId: string): Promise<Chapter[]> {
     const $ = this.cheerio.load(await this.fetch(this.getMangaShareUrl(mangaId)));
     const chapters: Chapter[] = [];
     const seen = new Set<string>();
 
     for (const element of $('a[href*="/chapter-"]').toArray()) {
-      // The theme writes these hrefs with a leading space inside the attribute,
-      // which would otherwise be carried into the request.
+      // The theme writes these hrefs with a leading space inside the attribute.
       const href = ($(element).attr("href") ?? "").trim();
       const id = /\/manga\/[a-z0-9-]+\/(chapter-[\d.]+)\/?$/.exec(href)?.[1] ?? "";
 
@@ -361,10 +338,7 @@ export class Rawkuma
       chapters.push(
         App.createChapter({
           id,
-          // The id carries the chapter number and the site's own post number,
-          // separated by a dot - and a half chapter carries a dot of its own, so
-          // the post number is everything after the *last* one. Reading it as a
-          // single decimal turns chapter 0 into 0.255192.
+          // id is chapter-{num}.{postId}, so the post id is after the last dot.
           chapNum: Number(id.replace(/^chapter-/, "").replace(/\.[^.]*$/, "")) || 0,
           langCode: "ja",
           name: this.decode($(element).text()),
@@ -381,9 +355,7 @@ export class Rawkuma
     const $ = this.cheerio.load(await this.fetch(`${DOMAIN}/manga/${mangaId}/${chapterId}/`));
     const pages: string[] = [];
 
-    // The pages are served from a separate host whose own name for the series
-    // does not match this one, so the addresses are read from the page in the
-    // order it lists them rather than built.
+    // The CDN names the series differently, so page URLs are read, not built.
     for (const element of $("img").toArray()) {
       const src = ($(element).attr("src") ?? "").trim();
 
