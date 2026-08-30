@@ -74,7 +74,7 @@ interface Book {
 }
 
 export const RawkumaInfo: SourceInfo = {
-  version: "3.0.0",
+  version: "4.0.0",
   name: "Rawkuma",
   icon: "icon.png",
   author: "kittycatgit",
@@ -137,6 +137,11 @@ export class Rawkuma
     );
 
     return typeof response.data === "string" ? response.data : String(response.data ?? "");
+  }
+
+  // Cards elsewhere serve a 96px crop; the original is the same name without it.
+  private fullSize(url: string): string {
+    return url.replace(/-\d+x\d+(\.[a-z]{3,4})$/i, "$1");
   }
 
   private decode(value: string): string {
@@ -249,7 +254,9 @@ export class Rawkuma
         App.createPartialSourceManga({
           mangaId: slug,
           title: this.decode(row.title?.rendered ?? slug),
-          image: row._embedded?.["wp:featuredmedia"]?.[0]?.source_url ?? `${DOMAIN}/favicon.ico`,
+          image: this.fullSize(
+            row._embedded?.["wp:featuredmedia"]?.[0]?.source_url ?? `${DOMAIN}/favicon.ico`,
+          ),
         }),
       );
     }
@@ -284,7 +291,7 @@ export class Rawkuma
         App.createPartialSourceManga({
           mangaId: slug,
           title: this.decode(name),
-          image: (image.attr("src") ?? "").trim() || `${DOMAIN}/favicon.ico`,
+          image: this.fullSize((image.attr("src") ?? "").trim()) || `${DOMAIN}/favicon.ico`,
         }),
       );
     }
@@ -384,7 +391,7 @@ export class Rawkuma
           this.decode(book.name ?? mangaId),
           ...(book.alternateName ? [this.decode(book.alternateName)] : []),
         ],
-        image: book.image?.url ?? `${DOMAIN}/favicon.ico`,
+        image: this.fullSize(book.image?.url ?? `${DOMAIN}/favicon.ico`),
         desc: this.decode(book.description ?? ""),
         status: book.creativeWorkStatus ?? (book.isCompleted ? "Completed" : "Ongoing"),
         ...(book.author?.name ? { author: book.author.name } : {}),
@@ -441,20 +448,26 @@ export class Rawkuma
 
   async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
     const $ = this.cheerio.load(await this.fetch(`${DOMAIN}/manga/${mangaId}/${chapterId}/`));
-    const pages: string[] = [];
+    const found = new Map<number, string>();
 
-    // The CDN names the series differently, so page URLs are read, not built.
+    // Pages are served from more than one CDN, so they are recognised by their
+    // numbered filename rather than by host, and ordered by that number.
     for (const element of $("img").toArray()) {
       const src = ($(element).attr("src") ?? "").trim();
+      const number = /\/(\d+)\.(?:jpg|jpeg|png|webp|avif)$/i.exec(src)?.[1];
 
-      if (src.includes("rcdn.") && !pages.includes(src)) {
-        pages.push(src);
+      if (number !== undefined && !found.has(Number(number))) {
+        found.set(Number(number), src);
       }
     }
 
-    if (pages.length === 0) {
+    if (found.size === 0) {
       throw new Error(`No pages were found for ${chapterId}.`);
     }
+
+    const pages = [...found.entries()]
+      .sort((left, right) => left[0] - right[0])
+      .map(([, url]) => url);
 
     return App.createChapterDetails({ id: chapterId, mangaId, pages });
   }
