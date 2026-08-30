@@ -74,7 +74,7 @@ interface Book {
 }
 
 export const RawkumaInfo: SourceInfo = {
-  version: "2.0.0",
+  version: "3.0.0",
   name: "Rawkuma",
   icon: "icon.png",
   author: "kittycatgit",
@@ -150,6 +150,26 @@ export class Rawkuma
       .replace(/&gt;/g, ">")
       .replace(/&nbsp;/g, " ")
       .trim();
+  }
+
+  private ago(text: string): Date | undefined {
+    const match = /(\d+)\s*(second|minute|hour|day|week|month|year)/i.exec(text);
+
+    if (!match) {
+      return undefined;
+    }
+
+    const spans: Record<string, number> = {
+      second: 1_000,
+      minute: 60_000,
+      hour: 3_600_000,
+      day: 86_400_000,
+      week: 604_800_000,
+      month: 2_629_800_000,
+      year: 31_557_600_000,
+    };
+
+    return new Date(Date.now() - Number(match[1]) * (spans[(match[2] ?? "").toLowerCase()] ?? 0));
   }
 
   private catalogueUrl(options: {
@@ -381,7 +401,7 @@ export class Rawkuma
 
   async getChapters(mangaId: string): Promise<Chapter[]> {
     const $ = this.cheerio.load(await this.fetch(this.getMangaShareUrl(mangaId)));
-    const rows: { id: string; chapNum: number; name: string }[] = [];
+    const rows: { id: string; chapNum: number; time?: Date }[] = [];
     const seen = new Set<string>();
 
     for (const element of $('a[href*="/chapter-"]').toArray()) {
@@ -398,7 +418,9 @@ export class Rawkuma
       rows.push({
         id,
         chapNum: Number(id.replace(/^chapter-/, "").replace(/\.[^.]*$/, "")) || 0,
-        name: this.decode($(element).text()),
+        // The label and the date collapse into one string ("Chapter 1766 days
+        // ago"), so the date is read from its own element.
+        time: this.ago($(element).find("time").first().text()),
       });
     }
 
@@ -411,8 +433,8 @@ export class Rawkuma
         id: row.id,
         chapNum: row.chapNum,
         langCode: "ja",
-        name: row.name,
         sortingIndex: rows.length - index,
+        ...(row.time ? { time: row.time } : {}),
       }),
     );
   }
