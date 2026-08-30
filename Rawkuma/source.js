@@ -731,6 +731,11 @@ var _Sources = (() => {
   var DOMAIN = "https://rawkuma.net";
   var API = `${DOMAIN}/wp-json/wp/v2`;
   var PAGE_SIZE = 30;
+  var TAXONOMIES = [
+    { id: "genre", label: "Genre", rest: "genre" },
+    { id: "status", label: "Status", rest: "manga-status" },
+    { id: "type", label: "Type", rest: "manga-type" }
+  ];
   var HOME_SECTIONS = [
     {
       id: "popular_today",
@@ -753,7 +758,7 @@ var _Sources = (() => {
     { id: "new_series", title: "New Series", type: import_types.HomeSectionType.singleRowNormal, order: "date" }
   ];
   var RawkumaInfo = {
-    version: "1.0.0",
+    version: "2.0.0",
     name: "Rawkuma",
     icon: "icon.png",
     author: "kittycatgit",
@@ -806,15 +811,44 @@ var _Sources = (() => {
     decode(value) {
       return value.replace(/<[^>]+>/g, "").replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code))).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").trim();
     }
-    catalogueUrl(page, orderBy, search) {
-      const parts = [`per_page=${PAGE_SIZE}`, `page=${page}`, "_embed=wp:featuredmedia"];
-      if (orderBy) {
-        parts.push(`orderby=${orderBy}`, "order=desc");
+    catalogueUrl(options) {
+      const parts = [`per_page=${PAGE_SIZE}`, `page=${options.page}`, "_embed=wp:featuredmedia"];
+      if (options.orderBy) {
+        parts.push(`orderby=${options.orderBy}`, "order=desc");
       }
-      if (search) {
-        parts.push(`search=${encodeURIComponent(search)}`);
+      if (options.search) {
+        parts.push(`search=${encodeURIComponent(options.search)}`);
+      }
+      const byTaxonomy = /* @__PURE__ */ new Map();
+      for (const tag of options.tags ?? []) {
+        const [group, term] = (tag.id ?? "").split(":");
+        const taxonomy = TAXONOMIES.find((entry) => entry.id === group);
+        if (taxonomy && term) {
+          byTaxonomy.set(taxonomy.rest, [...byTaxonomy.get(taxonomy.rest) ?? [], term]);
+        }
+      }
+      for (const [rest, terms] of byTaxonomy) {
+        parts.push(`${rest}=${terms.join(",")}`);
       }
       return `${API}/manga?${parts.join("&")}`;
+    }
+    async getSearchTags() {
+      const sections = [];
+      for (const taxonomy of TAXONOMIES) {
+        const terms = JSON.parse(
+          await this.fetch(`${API}/${taxonomy.rest}?per_page=100&orderby=name&order=asc`)
+        );
+        const tags = terms.filter((term) => term.id !== void 0 && term.name).map(
+          (term) => App.createTag({ id: `${taxonomy.id}:${term.id}`, label: this.decode(term.name ?? "") })
+        );
+        if (tags.length > 0) {
+          sections.push(App.createTagSection({ id: taxonomy.id, label: taxonomy.label, tags }));
+        }
+      }
+      return sections;
+    }
+    async supportsTagExclusion() {
+      return false;
     }
     async catalogue(url) {
       const rows = JSON.parse(await this.fetch(url));
@@ -892,7 +926,7 @@ var _Sources = (() => {
         return App.createPagedResults({ results: [] });
       }
       const page = metadata?.page ?? 1;
-      const results = await this.catalogue(this.catalogueUrl(page, entry.order));
+      const results = await this.catalogue(this.catalogueUrl({ page, orderBy: entry.order }));
       return App.createPagedResults({
         results: results.results,
         metadata: (results.results?.length ?? 0) < PAGE_SIZE ? void 0 : { page: page + 1 }
@@ -901,7 +935,11 @@ var _Sources = (() => {
     async getSearchResults(query, metadata) {
       const page = metadata?.page ?? 1;
       const results = await this.catalogue(
-        this.catalogueUrl(page, void 0, (query.title ?? "").trim() || void 0)
+        this.catalogueUrl({
+          page,
+          search: (query.title ?? "").trim() || void 0,
+          tags: query.includedTags
+        })
       );
       return App.createPagedResults({
         results: results.results,
@@ -948,7 +986,7 @@ var _Sources = (() => {
     }
     async getChapters(mangaId) {
       const $ = this.cheerio.load(await this.fetch(this.getMangaShareUrl(mangaId)));
-      const chapters = [];
+      const rows = [];
       const seen = /* @__PURE__ */ new Set();
       for (const element of $('a[href*="/chapter-"]').toArray()) {
         const href = ($(element).attr("href") ?? "").trim();
@@ -957,18 +995,22 @@ var _Sources = (() => {
           continue;
         }
         seen.add(id);
-        chapters.push(
-          App.createChapter({
-            id,
-            // id is chapter-{num}.{postId}, so the post id is after the last dot.
-            chapNum: Number(id.replace(/^chapter-/, "").replace(/\.[^.]*$/, "")) || 0,
-            langCode: "ja",
-            name: this.decode($(element).text())
-          })
-        );
+        rows.push({
+          id,
+          chapNum: Number(id.replace(/^chapter-/, "").replace(/\.[^.]*$/, "")) || 0,
+          name: this.decode($(element).text())
+        });
       }
-      const sorted = chapters.sort((left, right) => right.chapNum - left.chapNum);
-      return sorted.map((chapter, index) => ({ ...chapter, sortingIndex: sorted.length - index }));
+      rows.sort((left, right) => right.chapNum - left.chapNum);
+      return rows.map(
+        (row, index) => App.createChapter({
+          id: row.id,
+          chapNum: row.chapNum,
+          langCode: "ja",
+          name: row.name,
+          sortingIndex: rows.length - index
+        })
+      );
     }
     async getChapterDetails(mangaId, chapterId) {
       const $ = this.cheerio.load(await this.fetch(`${DOMAIN}/manga/${mangaId}/${chapterId}/`));
