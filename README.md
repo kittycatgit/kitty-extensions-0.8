@@ -1,4 +1,4 @@
-# Kitty Extensions (0.8)
+# kittycatgit Extensions (0.8)
 
 Paperback 0.8 extensions.
 

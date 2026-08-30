@@ -1,5 +1,5 @@
 {
-  "name": "Kitty Extensions (0.8)",
+  "name": "kittycatgit-extensions-0.8",
   "private": true,
   "description": "Paperback 0.8 extensions by kittycatgit.",
   "scripts": {
@@ -21,5 +21,5 @@
     "oxlint": "^1.78.0",
     "typescript": "^5.9.2"
   },
-  "repositoryName": "Kitty Extensions (0.8)"
+  "repositoryName": "kittycatgit Extensions (0.8)"
 }
