@@ -74,7 +74,7 @@ interface Book {
 }
 
 export const RawkumaInfo: SourceInfo = {
-  version: "4.0.0",
+  version: "5.0.0",
   name: "Rawkuma",
   icon: "icon.png",
   author: "kittycatgit",
@@ -447,27 +447,25 @@ export class Rawkuma
   }
 
   async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
-    const $ = this.cheerio.load(await this.fetch(`${DOMAIN}/manga/${mangaId}/${chapterId}/`));
-    const found = new Map<number, string>();
+    // The chapter id ends in the site's own post id, which its API answers with.
+    const postId =
+      chapterId
+        .replace(/^chapter-/, "")
+        .split(".")
+        .pop() ?? "";
+    const chapter = JSON.parse(await this.fetch(`${API}/chapter/${postId}`)) as {
+      content?: { rendered?: string };
+    };
 
-    // Pages are served from more than one CDN, so they are recognised by their
-    // numbered filename rather than by host, and ordered by that number.
-    for (const element of $("img").toArray()) {
-      const src = ($(element).attr("src") ?? "").trim();
-      const number = /\/(\d+)\.(?:jpg|jpeg|png|webp|avif)$/i.exec(src)?.[1];
+    const $ = this.cheerio.load(chapter.content?.rendered ?? "");
+    const pages = $("img")
+      .toArray()
+      .map((element) => ($(element).attr("src") ?? "").trim())
+      .filter((src) => src.length > 0);
 
-      if (number !== undefined && !found.has(Number(number))) {
-        found.set(Number(number), src);
-      }
-    }
-
-    if (found.size === 0) {
+    if (pages.length === 0) {
       throw new Error(`No pages were found for ${chapterId}.`);
     }
-
-    const pages = [...found.entries()]
-      .sort((left, right) => left[0] - right[0])
-      .map(([, url]) => url);
 
     return App.createChapterDetails({ id: chapterId, mangaId, pages });
   }
