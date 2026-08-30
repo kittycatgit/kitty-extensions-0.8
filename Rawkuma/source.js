@@ -732,10 +732,25 @@ var _Sources = (() => {
   var API = `${DOMAIN}/wp-json/wp/v2`;
   var PAGE_SIZE = 30;
   var HOME_SECTIONS = [
-    { id: "popular_today", title: "Popular Today", type: import_types.HomeSectionType.singleRowLarge },
-    { id: "latest_update", title: "Latest Update", type: import_types.HomeSectionType.singleRowNormal },
-    { id: "top_series", title: "Top Series", type: import_types.HomeSectionType.singleRowNormal },
-    { id: "new_series", title: "New Series", type: import_types.HomeSectionType.singleRowNormal }
+    {
+      id: "popular_today",
+      title: "Popular Today",
+      type: import_types.HomeSectionType.singleRowLarge,
+      order: void 0
+    },
+    {
+      id: "latest_update",
+      title: "Latest Update",
+      type: import_types.HomeSectionType.singleRowNormal,
+      order: "modified"
+    },
+    {
+      id: "top_series",
+      title: "Top Series",
+      type: import_types.HomeSectionType.singleRowNormal,
+      order: void 0
+    },
+    { id: "new_series", title: "New Series", type: import_types.HomeSectionType.singleRowNormal, order: "date" }
   ];
   var RawkumaInfo = {
     version: "1.0.0",
@@ -768,11 +783,6 @@ var _Sources = (() => {
         }
       });
     }
-    /**
-     * The site sits behind Cloudflare, which challenges a native client where it
-     * waves a browser through. Handing the app the site root lets it solve the
-     * challenge in a webview and keep the cookies for later requests.
-     */
     async getCloudflareBypassRequestAsync() {
       return App.createRequest({
         url: DOMAIN,
@@ -793,58 +803,52 @@ var _Sources = (() => {
       );
       return typeof response.data === "string" ? response.data : String(response.data ?? "");
     }
-    async json(url) {
-      return JSON.parse(await this.fetch(url));
-    }
-    /**
-     * A catalogue row as the API describes it.
-     *
-     * The cover is asked for in the same call rather than fetched per title: the
-     * API will embed it, and a request per row would be a request per row.
-     */
-    toTile(entry) {
-      const slug = (entry.slug ?? "").trim();
-      if (!slug || slug === "feed") {
-        return void 0;
-      }
-      const media = entry._embedded?.["wp:featuredmedia"]?.[0]?.source_url ?? "";
-      return App.createPartialSourceManga({
-        mangaId: slug,
-        title: this.decode(entry.title?.rendered ?? slug),
-        image: media || `${DOMAIN}/favicon.ico`
-      });
-    }
-    /** WordPress renders titles with HTML entities in them. */
     decode(value) {
       return value.replace(/<[^>]+>/g, "").replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code))).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").trim();
     }
-    /**
-     * The titles a homepage section holds.
-     *
-     * The page is one document with the sections laid out in order, so a section
-     * is the run of markup between its own heading and the next one. Cards are
-     * found by their link rather than by class: the theme's classes are utility
-     * ones that change with the layout, while the link to a title does not.
-     */
-    sectionTiles(html, title, nextTitle) {
+    catalogueUrl(page, orderBy, search) {
+      const parts = [`per_page=${PAGE_SIZE}`, `page=${page}`, "_embed=wp:featuredmedia"];
+      if (orderBy) {
+        parts.push(`orderby=${orderBy}`, "order=desc");
+      }
+      if (search) {
+        parts.push(`search=${encodeURIComponent(search)}`);
+      }
+      return `${API}/manga?${parts.join("&")}`;
+    }
+    async catalogue(url) {
+      const rows = JSON.parse(await this.fetch(url));
+      const results = [];
+      for (const row of rows) {
+        const slug = (row.slug ?? "").trim();
+        if (!slug || slug === "feed") {
+          continue;
+        }
+        results.push(
+          App.createPartialSourceManga({
+            mangaId: slug,
+            title: this.decode(row.title?.rendered ?? slug),
+            image: row._embedded?.["wp:featuredmedia"]?.[0]?.source_url ?? `${DOMAIN}/favicon.ico`
+          })
+        );
+      }
+      return App.createPagedResults({ results });
+    }
+    sectionTiles(html, title, next) {
       const start = html.indexOf(title);
       if (start < 0) {
         return [];
       }
-      const after = nextTitle ? html.indexOf(nextTitle, start + title.length) : -1;
-      const block = html.slice(start, after > 0 ? after : void 0);
-      const $ = this.cheerio.load(block);
+      const end = next ? html.indexOf(next, start + title.length) : -1;
+      const $ = this.cheerio.load(html.slice(start, end > 0 ? end : void 0));
       const tiles = [];
       const seen = /* @__PURE__ */ new Set();
       for (const element of $('a[href*="/manga/"]').toArray()) {
         const href = ($(element).attr("href") ?? "").trim();
         const slug = /\/manga\/([a-z0-9-]+)\/?$/.exec(href)?.[1] ?? "";
-        if (!slug || slug === "feed" || seen.has(slug)) {
-          continue;
-        }
         const image = $(element).find("img").first();
         const name = (image.attr("alt") ?? "").trim();
-        if (!name) {
+        if (!slug || slug === "feed" || !name || seen.has(slug)) {
           continue;
         }
         seen.add(slug);
@@ -865,7 +869,7 @@ var _Sources = (() => {
             id: entry.id,
             title: entry.title,
             type: entry.type,
-            containsMoreItems: false
+            containsMoreItems: entry.order !== void 0
           })
         );
       }
@@ -876,35 +880,52 @@ var _Sources = (() => {
             id: entry.id,
             title: entry.title,
             type: entry.type,
-            containsMoreItems: false,
+            containsMoreItems: entry.order !== void 0,
             items: this.sectionTiles(html, entry.title, HOME_SECTIONS[index + 1]?.title)
           })
         );
       }
     }
-    /**
-     * The homepage rows are what the site itself shows and offer no more than
-     * that, so there is nothing further to hand over.
-     */
-    async getViewMoreItems(_homepageSectionId, _metadata) {
-      return App.createPagedResults({ results: [] });
+    async getViewMoreItems(homepageSectionId, metadata) {
+      const entry = HOME_SECTIONS.find((row) => row.id === homepageSectionId);
+      if (!entry?.order) {
+        return App.createPagedResults({ results: [] });
+      }
+      const page = metadata?.page ?? 1;
+      const results = await this.catalogue(this.catalogueUrl(page, entry.order));
+      return App.createPagedResults({
+        results: results.results,
+        metadata: (results.results?.length ?? 0) < PAGE_SIZE ? void 0 : { page: page + 1 }
+      });
     }
     async getSearchResults(query, metadata) {
       const page = metadata?.page ?? 1;
-      const title = (query.title ?? "").trim();
-      const url = `${API}/manga?per_page=${PAGE_SIZE}&page=${page}&_embed=wp:featuredmedia` + (title ? `&search=${encodeURIComponent(title)}` : "");
-      const rows = await this.json(url);
-      const results = rows.map((row) => this.toTile(row)).filter((tile) => tile !== void 0);
+      const results = await this.catalogue(
+        this.catalogueUrl(page, void 0, (query.title ?? "").trim() || void 0)
+      );
       return App.createPagedResults({
-        results,
-        // A short page is the last one; the API answers an over-run page with an
-        // error rather than an empty list, so asking again would fail loudly.
-        metadata: results.length < PAGE_SIZE ? void 0 : { page: page + 1 }
+        results: results.results,
+        metadata: (results.results?.length ?? 0) < PAGE_SIZE ? void 0 : { page: page + 1 }
       });
     }
+    book(html) {
+      for (const match of html.matchAll(
+        /<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi
+      )) {
+        try {
+          const parsed = JSON.parse(match[1] ?? "");
+          const type = parsed["@type"];
+          if (type === "Book" || Array.isArray(type) && type.includes("Book")) {
+            return parsed;
+          }
+        } catch {
+          continue;
+        }
+      }
+      return {};
+    }
     async getMangaDetails(mangaId) {
-      const html = await this.fetch(this.getMangaShareUrl(mangaId));
-      const book = this.book(html);
+      const book = this.book(await this.fetch(this.getMangaShareUrl(mangaId)));
       const genres = (book.genre ?? []).map(
         (name) => App.createTag({ id: name.toLowerCase(), label: name })
       );
@@ -925,29 +946,6 @@ var _Sources = (() => {
         })
       });
     }
-    /**
-     * The series' own description, as the page states it for search engines.
-     *
-     * Taken from the page's structured data rather than its markup: the theme is
-     * built from utility classes that carry no meaning, while this block names
-     * every field it holds.
-     */
-    book(html) {
-      for (const match of html.matchAll(
-        /<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi
-      )) {
-        try {
-          const parsed = JSON.parse(match[1] ?? "");
-          const type = parsed["@type"];
-          const isBook = type === "Book" || Array.isArray(type) && type.includes("Book");
-          if (isBook) {
-            return parsed;
-          }
-        } catch {
-        }
-      }
-      return {};
-    }
     async getChapters(mangaId) {
       const $ = this.cheerio.load(await this.fetch(this.getMangaShareUrl(mangaId)));
       const chapters = [];
@@ -962,10 +960,7 @@ var _Sources = (() => {
         chapters.push(
           App.createChapter({
             id,
-            // The id carries the chapter number and the site's own post number,
-            // separated by a dot - and a half chapter carries a dot of its own, so
-            // the post number is everything after the *last* one. Reading it as a
-            // single decimal turns chapter 0 into 0.255192.
+            // id is chapter-{num}.{postId}, so the post id is after the last dot.
             chapNum: Number(id.replace(/^chapter-/, "").replace(/\.[^.]*$/, "")) || 0,
             langCode: "ja",
             name: this.decode($(element).text())
