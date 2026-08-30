@@ -17,11 +17,19 @@ import {
   SourceInfo,
   SourceIntents,
   SourceManga,
+  Tag,
+  TagSection,
 } from "@paperback/types";
 
 const DOMAIN = "https://rawkuma.net";
 const API = `${DOMAIN}/wp-json/wp/v2`;
 const PAGE_SIZE = 30;
+
+const TAXONOMIES = [
+  { id: "genre", label: "Genre", rest: "genre" },
+  { id: "status", label: "Status", rest: "manga-status" },
+  { id: "type", label: "Type", rest: "manga-type" },
+] as const;
 
 // The rendered catalogue ignores ?page= entirely, so browsing goes through the API.
 const HOME_SECTIONS = [
@@ -66,7 +74,7 @@ interface Book {
 }
 
 export const RawkumaInfo: SourceInfo = {
-  version: "1.0.0",
+  version: "2.0.0",
   name: "Rawkuma",
   icon: "icon.png",
   author: "kittycatgit",
@@ -144,18 +152,65 @@ export class Rawkuma
       .trim();
   }
 
-  private catalogueUrl(page: number, orderBy?: string, search?: string): string {
-    const parts = [`per_page=${PAGE_SIZE}`, `page=${page}`, "_embed=wp:featuredmedia"];
+  private catalogueUrl(options: {
+    page: number;
+    orderBy?: string;
+    search?: string;
+    tags?: Tag[];
+  }): string {
+    const parts = [`per_page=${PAGE_SIZE}`, `page=${options.page}`, "_embed=wp:featuredmedia"];
 
-    if (orderBy) {
-      parts.push(`orderby=${orderBy}`, "order=desc");
+    if (options.orderBy) {
+      parts.push(`orderby=${options.orderBy}`, "order=desc");
     }
 
-    if (search) {
-      parts.push(`search=${encodeURIComponent(search)}`);
+    if (options.search) {
+      parts.push(`search=${encodeURIComponent(options.search)}`);
+    }
+
+    // Tag ids are "<taxonomy>:<term id>", which is how they survive the round trip.
+    const byTaxonomy = new Map<string, string[]>();
+
+    for (const tag of options.tags ?? []) {
+      const [group, term] = (tag.id ?? "").split(":");
+      const taxonomy = TAXONOMIES.find((entry) => entry.id === group);
+
+      if (taxonomy && term) {
+        byTaxonomy.set(taxonomy.rest, [...(byTaxonomy.get(taxonomy.rest) ?? []), term]);
+      }
+    }
+
+    for (const [rest, terms] of byTaxonomy) {
+      parts.push(`${rest}=${terms.join(",")}`);
     }
 
     return `${API}/manga?${parts.join("&")}`;
+  }
+
+  async getSearchTags(): Promise<TagSection[]> {
+    const sections: TagSection[] = [];
+
+    for (const taxonomy of TAXONOMIES) {
+      const terms = JSON.parse(
+        await this.fetch(`${API}/${taxonomy.rest}?per_page=100&orderby=name&order=asc`),
+      ) as { id?: number; name?: string; slug?: string }[];
+
+      const tags = terms
+        .filter((term) => term.id !== undefined && term.name)
+        .map((term) =>
+          App.createTag({ id: `${taxonomy.id}:${term.id}`, label: this.decode(term.name ?? "") }),
+        );
+
+      if (tags.length > 0) {
+        sections.push(App.createTagSection({ id: taxonomy.id, label: taxonomy.label, tags }));
+      }
+    }
+
+    return sections;
+  }
+
+  async supportsTagExclusion(): Promise<boolean> {
+    return false;
   }
 
   private async catalogue(url: string): Promise<PagedResults> {
@@ -253,7 +308,7 @@ export class Rawkuma
     }
 
     const page = (metadata as { page?: number } | undefined)?.page ?? 1;
-    const results = await this.catalogue(this.catalogueUrl(page, entry.order));
+    const results = await this.catalogue(this.catalogueUrl({ page, orderBy: entry.order }));
 
     return App.createPagedResults({
       results: results.results,
@@ -264,7 +319,11 @@ export class Rawkuma
   async getSearchResults(query: SearchRequest, metadata: unknown): Promise<PagedResults> {
     const page = (metadata as { page?: number } | undefined)?.page ?? 1;
     const results = await this.catalogue(
-      this.catalogueUrl(page, undefined, (query.title ?? "").trim() || undefined),
+      this.catalogueUrl({
+        page,
+        search: (query.title ?? "").trim() || undefined,
+        tags: query.includedTags,
+      }),
     );
 
     return App.createPagedResults({
@@ -322,7 +381,7 @@ export class Rawkuma
 
   async getChapters(mangaId: string): Promise<Chapter[]> {
     const $ = this.cheerio.load(await this.fetch(this.getMangaShareUrl(mangaId)));
-    const chapters: Chapter[] = [];
+    const rows: { id: string; chapNum: number; name: string }[] = [];
     const seen = new Set<string>();
 
     for (const element of $('a[href*="/chapter-"]').toArray()) {
@@ -335,20 +394,27 @@ export class Rawkuma
       }
 
       seen.add(id);
-      chapters.push(
-        App.createChapter({
-          id,
-          // id is chapter-{num}.{postId}, so the post id is after the last dot.
-          chapNum: Number(id.replace(/^chapter-/, "").replace(/\.[^.]*$/, "")) || 0,
-          langCode: "ja",
-          name: this.decode($(element).text()),
-        }),
-      );
+      // id is chapter-{num}.{postId}, so the post id is after the last dot.
+      rows.push({
+        id,
+        chapNum: Number(id.replace(/^chapter-/, "").replace(/\.[^.]*$/, "")) || 0,
+        name: this.decode($(element).text()),
+      });
     }
 
-    const sorted = chapters.sort((left, right) => right.chapNum - left.chapNum);
+    rows.sort((left, right) => right.chapNum - left.chapNum);
 
-    return sorted.map((chapter, index) => ({ ...chapter, sortingIndex: sorted.length - index }));
+    // Chapters are built once, with their order: spreading one back into a plain
+    // object loses what the app needs on the other side of the bridge.
+    return rows.map((row, index) =>
+      App.createChapter({
+        id: row.id,
+        chapNum: row.chapNum,
+        langCode: "ja",
+        name: row.name,
+        sortingIndex: rows.length - index,
+      }),
+    );
   }
 
   async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
