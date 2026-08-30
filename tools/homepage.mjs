@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const BUNDLES = "bundles";
@@ -12,14 +12,22 @@ const baseURL = pkg.baseURL ?? (owner && name ? `https://${owner}.github.io/${na
 const title = pkg.repositoryName ?? "Paperback Repository";
 const sources = [...(data.sources ?? [])].sort((a, b) => a.name.localeCompare(b.name));
 const esc = (v) =>
-  String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  String(v ?? "").replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+  );
 
 const built = data.buildTime
-  ? new Date(data.buildTime).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+  ? new Date(data.buildTime).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    })
   : "";
 
 const cards = sources
-  .map((s) => `
+  .map(
+    (s) => `
       <article class="card">
         <img class="icon" src="${esc(s.id)}/includes/${esc(s.icon)}" alt="" loading="lazy" width="56" height="56">
         <div class="meta">
@@ -31,7 +39,8 @@ const cards = sources
             ${s.websiteBaseURL ? `<a class="tag link" href="${esc(s.websiteBaseURL)}" rel="noreferrer noopener">site ↗</a>` : ""}
           </div>
         </div>
-      </article>`)
+      </article>`,
+  )
   .join("");
 
 const html = `<!doctype html>

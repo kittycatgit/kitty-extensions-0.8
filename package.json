@@ -21,6 +21,6 @@
     "oxlint": "^1.78.0",
     "typescript": "^5.9.2"
   },
-  "repositoryName": "kittycatgit Extensions (0.8)",
-  "baseURL": "https://kittycatgit.github.io/kitty-extensions-0.8"
+  "baseURL": "https://kittycatgit.github.io/kitty-extensions-0.8",
+  "repositoryName": "kittycatgit Extensions (0.8)"
 }
