@@ -3,6 +3,8 @@ import { RequestManager } from "@paperback/types";
 import {
   API_URL,
   BASE_URL,
+  TAGS_CACHE_DATE_KEY,
+  TAGS_CACHE_KEY,
   INTEGRITY_EXP_KEY,
   INTEGRITY_TOKEN_KEY,
   type ChallengeDto,
@@ -26,6 +28,12 @@ export class KaganeApi {
   private taxonomy?: { at: number; value: Taxonomy };
 
   private tags?: { at: number; value: TagDto[] };
+
+  // The home page asks four rows at once; without holding the in-flight promise
+  // each of them starts its own copy of every taxonomy request.
+  private pendingTaxonomy?: Promise<Taxonomy>;
+
+  private pendingTags?: Promise<TagDto[]>;
 
   private integrity?: { token: string; exp: number };
 
@@ -105,6 +113,14 @@ export class KaganeApi {
       return this.taxonomy.value;
     }
 
+    this.pendingTaxonomy ??= this.loadTaxonomy().finally(() => {
+      this.pendingTaxonomy = undefined;
+    });
+
+    return this.pendingTaxonomy;
+  }
+
+  private async loadTaxonomy(): Promise<Taxonomy> {
     const [genres, sources] = await Promise.all([
       this.fetchJSON<GenreDto[]>(`${API_URL}/genres/list`),
       this.fetchJSON<{ sources?: SourceDto[] }>(`${API_URL}/sources/list`, {
@@ -125,12 +141,59 @@ export class KaganeApi {
       return this.tags.value;
     }
 
+    this.pendingTags ??= this.loadTags().finally(() => {
+      this.pendingTags = undefined;
+    });
+
+    return this.pendingTags;
+  }
+
+  private async loadTags(): Promise<TagDto[]> {
+    const cached = await this.readCachedTags();
+
+    if (cached) {
+      this.tags = { at: Date.now(), value: cached };
+      return cached;
+    }
+
     const tags = (await this.fetchJSON<TagDto[]>(`${API_URL}/tags/list`)).filter(
       (tag) => tag.id && tag.tag_name,
     );
     this.tags = { at: Date.now(), value: tags };
 
+    // Roughly 700KB, so persisting is best-effort: a storage failure after a
+    // good fetch must not lose the tags the caller is waiting for.
+    try {
+      await stateManager().store(TAGS_CACHE_KEY, JSON.stringify(tags));
+      await stateManager().store(TAGS_CACHE_DATE_KEY, Date.now());
+    } catch {
+      // Memory cache still serves this session.
+    }
+
     return tags;
+  }
+
+  private async readCachedTags(): Promise<TagDto[] | undefined> {
+    try {
+      const at = Number((await stateManager().retrieve(TAGS_CACHE_DATE_KEY)) ?? 0);
+      const raw = await stateManager().retrieve(TAGS_CACHE_KEY);
+
+      if (typeof raw !== "string" || Date.now() - at > TAXONOMY_TTL_MS) {
+        return undefined;
+      }
+
+      const parsed = JSON.parse(raw) as TagDto[];
+
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Fire-and-forget: pulls the taxonomy into memory so the filter sheet opens
+  // without waiting on it. Never surfaces an error and never blocks a caller.
+  warm(): void {
+    void this.getTags().catch(() => undefined);
   }
 
   // Lower-cased name to id, for resolving tag names typed into settings.

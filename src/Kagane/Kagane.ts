@@ -13,6 +13,7 @@ import {
   PartialSourceManga,
   Request,
   RequestManager,
+  SearchField,
   SearchRequest,
   SearchResultsProviding,
   SourceInfo,
@@ -49,7 +50,7 @@ import {
 import { POPULAR_TAG_NAMES } from "./tags";
 
 export const KaganeInfo: SourceInfo = {
-  version: "1.0.0",
+  version: "2.0.0",
   name: "Kagane",
   icon: "icon.png",
   author: "kittycatgit",
@@ -183,6 +184,18 @@ export class Kagane
     return true;
   }
 
+  // Only a few hundred of the ~8,500 tags fit in a picker, so this reaches the
+  // rest by name. A leading "-" excludes: "romance, -gore".
+  async getSearchFields(): Promise<SearchField[]> {
+    return [
+      App.createSearchField({
+        id: "tags_text",
+        name: "Tags",
+        placeholder: "romance, -gore",
+      }),
+    ];
+  }
+
   async supportsTagExclusion(): Promise<boolean> {
     return true;
   }
@@ -240,14 +253,18 @@ export class Kagane
 
     const includedTags = this.split(query?.includedTags, "tag");
     const excludedTags = [...this.split(query?.excludedTags, "tag"), ...hiddenTagIds];
+    const typed = this.parseTypedTags(String(query?.parameters?.["tags_text"] ?? ""));
 
-    // Names typed into settings are resolved here so the taxonomy is only
-    // fetched when somebody actually uses them.
-    if (customHidden.length > 0) {
+    // Names are resolved here so the 8,500-entry taxonomy is only fetched when
+    // somebody actually typed one. Names that match nothing drop out quietly.
+    const names = [...customHidden, ...typed.included, ...typed.excluded];
+    if (names.length > 0) {
       const byName = await this.api.getTagIdsByName();
-      excludedTags.push(
-        ...customHidden.map((name) => byName[name.toLowerCase()] ?? "").filter(Boolean),
-      );
+      const resolve = (list: string[]) =>
+        list.map((name) => byName[name.toLowerCase()] ?? "").filter(Boolean);
+
+      includedTags.push(...resolve(typed.included));
+      excludedTags.push(...resolve(customHidden), ...resolve(typed.excluded));
     }
 
     if (includedTags.length > 0 || excludedTags.length > 0) {
@@ -255,6 +272,23 @@ export class Kagane
     }
 
     return body;
+  }
+
+  private parseTypedTags(input: string): { included: string[]; excluded: string[] } {
+    const included: string[] = [];
+    const excluded: string[] = [];
+
+    for (const entry of input.split(",")) {
+      const trimmed = entry.trim();
+      const exclude = trimmed.startsWith("-");
+      const name = (exclude ? trimmed.slice(1) : trimmed).trim();
+
+      if (name) {
+        (exclude ? excluded : included).push(name);
+      }
+    }
+
+    return { included, excluded };
   }
 
   private compound(included: string[], excluded: string[], matchAll: boolean) {
@@ -276,17 +310,22 @@ export class Kagane
       parts.push(`sort=${sort}`);
     }
 
-    const [data, sources, showSource] = await Promise.all([
+    const showSource = await getShowSource();
+
+    // The source list is only there to print a name beside the title, so it is
+    // not fetched at all unless that setting is on.
+    const [data, sources] = await Promise.all([
       this.api.fetchJSON<SearchDto>(`${API_URL}/search/series?${parts.join("&")}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       }),
-      this.api
-        .getTaxonomy()
-        .then((taxonomy) => taxonomy.sources)
-        .catch(() => [] as SourceDto[]),
-      getShowSource(),
+      showSource
+        ? this.api
+            .getTaxonomy()
+            .then((taxonomy) => taxonomy.sources)
+            .catch(() => [] as SourceDto[])
+        : Promise.resolve([] as SourceDto[]),
     ]);
 
     const titles = new Map(sources.map((source) => [source.source_id, source.title]));
@@ -342,6 +381,10 @@ export class Kagane
         }),
       );
     }
+
+    // Rows are already painted; pull the tag list in behind them so the filter
+    // sheet opens without a wait.
+    this.api.warm();
   }
 
   async getViewMoreItems(homepageSectionId: string, metadata: unknown): Promise<PagedResults> {

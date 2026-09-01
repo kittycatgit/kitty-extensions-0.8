@@ -12,6 +12,8 @@ export const SHOW_SOURCE_KEY = "kagane-show-source";
 export const TAG_MATCH_ALL_KEY = "kagane-tag-match-all";
 export const HIDDEN_TAG_CATEGORIES_KEY = "kagane-hidden-tag-categories";
 export const CUSTOM_HIDDEN_TAGS_KEY = "kagane-custom-hidden-tags";
+export const TAGS_CACHE_KEY = "kagane-tags-cache";
+export const TAGS_CACHE_DATE_KEY = "kagane-tags-cache-date";
 
 // The API rejects lower-case ratings: "unknown variant `safe`, expected one of
 // `Safe`, `Suggestive`, `Erotica`, `Pornographic`".
