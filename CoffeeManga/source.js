@@ -731,14 +731,13 @@ var _Sources = (() => {
   var DOMAIN = "https://coffeemanga.net";
   var PAGE_SIZE = 12;
   var HOME_SECTIONS = [
-    { id: "popular_today", title: "Popular today", order: "trending" },
-    { id: "latest_updates", title: "Latest updates", order: "latest" },
-    { id: "new_series", title: "New Series", order: "new-manga" },
-    { id: "most_read", title: "Most read", order: "views" }
+    { id: "popular_today", title: "Popular today", selector: "a.rcard", order: "trending" },
+    { id: "latest_updates", title: "Latest updates", selector: "div.gcard-w", order: "latest" },
+    { id: "new_series", title: "New Series", selector: "a.fcard", order: "new-manga" }
   ];
   var FEATURED = { id: "featured", title: "Featured" };
   var CoffeeMangaInfo = {
-    version: "2.0.0",
+    version: "3.0.0",
     name: "CoffeeManga",
     icon: "icon.png",
     author: "kittycatgit",
@@ -896,6 +895,37 @@ var _Sources = (() => {
       }
       return tiles;
     }
+    // Each home rail uses its own card class, so the row is located by selector
+    // and the pieces are read from whichever wrapper that card happens to use.
+    homeTiles(html, selector) {
+      const $ = this.cheerio.load(html);
+      const tiles = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const element of $(selector).toArray()) {
+        const root = $(element);
+        const link = root.is("a") ? root : root.find("a").first();
+        const slug = this.slugOf(link.attr("href") ?? "");
+        const title = this.decode(
+          (link.attr("title") ?? "") || root.find("div.rt, div.g-t, div.fc-t").first().text()
+        );
+        if (!slug || slug === "feed" || !title || seen.has(slug)) {
+          continue;
+        }
+        seen.add(slug);
+        const chapter = this.decode(
+          root.find("span.gc-cl").first().clone().children().remove().end().text()
+        );
+        tiles.push(
+          App.createPartialSourceManga({
+            mangaId: slug,
+            title,
+            image: this.cover(root.find("img")),
+            ...chapter ? { subtitle: chapter } : {}
+          })
+        );
+      }
+      return tiles;
+    }
     listingUrl(options) {
       if (options.genre) {
         return `${DOMAIN}/manga-genre/${options.genre}/page/${options.page}/${options.order ? `?m_orderby=${options.order}` : ""}`;
@@ -920,22 +950,25 @@ var _Sources = (() => {
     async supportsTagExclusion() {
       return false;
     }
+    // One request paints the whole screen: every rail is already on the home page,
+    // so fetching a listing per row would just stack round trips.
     async getHomePageSections(sectionCallback) {
-      sectionCallback(
-        App.createHomeSection({
-          id: FEATURED.id,
-          title: FEATURED.title,
-          type: import_types.HomeSectionType.singleRowLarge,
-          containsMoreItems: false
-        })
-      );
-      for (const entry of HOME_SECTIONS) {
+      const rows = [
+        { id: FEATURED.id, title: FEATURED.title, type: import_types.HomeSectionType.singleRowLarge, more: false },
+        ...HOME_SECTIONS.map((entry) => ({
+          id: entry.id,
+          title: entry.title,
+          type: import_types.HomeSectionType.singleRowNormal,
+          more: true
+        }))
+      ];
+      for (const row of rows) {
         sectionCallback(
           App.createHomeSection({
-            id: entry.id,
-            title: entry.title,
-            type: import_types.HomeSectionType.singleRowNormal,
-            containsMoreItems: true
+            id: row.id,
+            title: row.title,
+            type: row.type,
+            containsMoreItems: row.more
           })
         );
       }
@@ -956,7 +989,7 @@ var _Sources = (() => {
             title: entry.title,
             type: import_types.HomeSectionType.singleRowNormal,
             containsMoreItems: true,
-            items: this.cards(await this.fetch(this.listingUrl({ page: 1, order: entry.order })))
+            items: this.homeTiles(home, entry.selector)
           })
         );
       }
