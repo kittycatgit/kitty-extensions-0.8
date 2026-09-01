@@ -758,7 +758,7 @@ var _Sources = (() => {
     { id: "new_series", title: "New Series", type: import_types.HomeSectionType.singleRowNormal, order: "date" }
   ];
   var RawkumaInfo = {
-    version: "5.0.0",
+    version: "6.0.0",
     name: "Rawkuma",
     icon: "icon.png",
     author: "kittycatgit",
@@ -773,7 +773,6 @@ var _Sources = (() => {
     constructor(cheerio) {
       this.cheerio = cheerio;
       this.requestManager = App.createRequestManager({
-        requestsPerSecond: 4,
         requestTimeout: 2e4,
         interceptor: {
           interceptRequest: async (request) => {

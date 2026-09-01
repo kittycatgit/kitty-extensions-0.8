@@ -738,7 +738,7 @@ var _Sources = (() => {
   ];
   var FEATURED = { id: "featured", title: "Featured" };
   var CoffeeMangaInfo = {
-    version: "1.0.0",
+    version: "2.0.0",
     name: "CoffeeManga",
     icon: "icon.png",
     author: "kittycatgit",
@@ -753,7 +753,6 @@ var _Sources = (() => {
     constructor(cheerio) {
       this.cheerio = cheerio;
       this.requestManager = App.createRequestManager({
-        requestsPerSecond: 4,
         requestTimeout: 2e4,
         interceptor: {
           interceptRequest: async (request) => {
