@@ -4,6 +4,7 @@ Paperback 0.8 extensions.
 
 ## Sources
 
+- [CoffeeManga](https://coffeemanga.net)
 - [Rawkuma](https://rawkuma.net)
 
 ## Install
