@@ -29,6 +29,7 @@ import {
   BASE_URL,
   FORMATS,
   HOME_SECTIONS,
+  MISSING_COVER,
   PAGE_SIZE,
   UPLOAD_STATUSES,
   type DetailsDto,
@@ -50,7 +51,7 @@ import {
 import { POPULAR_TAG_NAMES } from "./tags";
 
 export const KaganeInfo: SourceInfo = {
-  version: "2.0.0",
+  version: "3.0.0",
   name: "Kagane",
   icon: "icon.png",
   author: "kittycatgit",
@@ -110,8 +111,11 @@ export class Kagane
     return `${BASE_URL}/series/${mangaId}`;
   }
 
+  // Some series carry no cover at all on Kagane. The fallback has to be a URL
+  // the app can try and fail on: an empty string blanks the whole row, and the
+  // favicon loads and gets stretched into a blurred logo.
   private cover(imageId?: string | null): string {
-    return imageId ? `${API_URL}/image/${imageId}/compressed` : `${BASE_URL}/favicon.ico`;
+    return imageId ? `${API_URL}/image/${imageId}/compressed` : MISSING_COVER;
   }
 
   // Tag ids carry the group they came from so the search body can put each one

@@ -2,6 +2,10 @@ export const BASE_URL = "https://kagane.to";
 export const API_URL = `${BASE_URL}/api/v2`;
 export const PAGE_SIZE = 35;
 
+// Deliberately not a real asset: the app draws its own placeholder when a cover
+// fails to load, which looks right, unlike a stretched favicon.
+export const MISSING_COVER = `${BASE_URL}/image/none.webp`;
+
 export const INTEGRITY_TOKEN_KEY = "kagane-integrity-token";
 export const INTEGRITY_EXP_KEY = "kagane-integrity-exp";
 export const CONTENT_RATINGS_KEY = "kagane-content-ratings";
