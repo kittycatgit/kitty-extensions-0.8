@@ -51,7 +51,7 @@ import {
 import { POPULAR_TAG_NAMES } from "./tags";
 
 export const KaganeInfo: SourceInfo = {
-  version: "3.0.0",
+  version: "4.0.0",
   name: "Kagane",
   icon: "icon.png",
   author: "kittycatgit",
@@ -485,7 +485,12 @@ export class Kagane
       throw new Error(`No chapters were listed for ${mangaId}.`);
     }
 
-    return books.map((book, index) => {
+    // The API returns books oldest-first and `sort_no` tracks the chapter number
+    // (decimals included), so ordering by it puts the newest chapter last —
+    // which is where the app expects the highest sortingIndex to be.
+    const ordered = [...books].sort((left, right) => left.sort_no - right.sort_no);
+
+    return ordered.map((book, index) => {
       const groupName = book.groups?.map((group) => group.title).join(", ") || source?.title || "";
       const time = book.created_at ? new Date(book.created_at) : undefined;
       const chapterNumber = Number(book.chapter_no);
@@ -494,7 +499,7 @@ export class Kagane
       return App.createChapter({
         id: book.book_id,
         chapNum: Number.isFinite(chapterNumber) ? chapterNumber : book.sort_no,
-        sortingIndex: books.length - index,
+        sortingIndex: index,
         langCode: "en",
         ...(book.title ? { name: book.title } : {}),
         ...(Number.isFinite(volume) ? { volume } : {}),
