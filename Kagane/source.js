@@ -733,6 +733,7 @@ var _Sources = (() => {
   var BASE_URL = "https://kagane.to";
   var API_URL = `${BASE_URL}/api/v2`;
   var PAGE_SIZE = 35;
+  var MISSING_COVER = `${BASE_URL}/image/none.webp`;
   var INTEGRITY_TOKEN_KEY = "kagane-integrity-token";
   var INTEGRITY_EXP_KEY = "kagane-integrity-exp";
   var CONTENT_RATINGS_KEY = "kagane-content-ratings";
@@ -1529,7 +1530,7 @@ var _Sources = (() => {
 
   // src/Kagane/Kagane.ts
   var KaganeInfo = {
-    version: "2.0.0",
+    version: "3.0.0",
     name: "Kagane",
     icon: "icon.png",
     author: "kittycatgit",
@@ -1573,8 +1574,11 @@ var _Sources = (() => {
     getMangaShareUrl(mangaId) {
       return `${BASE_URL}/series/${mangaId}`;
     }
+    // Some series carry no cover at all on Kagane. The fallback has to be a URL
+    // the app can try and fail on: an empty string blanks the whole row, and the
+    // favicon loads and gets stretched into a blurred logo.
     cover(imageId) {
-      return imageId ? `${API_URL}/image/${imageId}/compressed` : `${BASE_URL}/favicon.ico`;
+      return imageId ? `${API_URL}/image/${imageId}/compressed` : MISSING_COVER;
     }
     // Tag ids carry the group they came from so the search body can put each one
     // in the right field; ids never contain spaces, which Paperback rejects.
