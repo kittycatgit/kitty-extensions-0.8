@@ -24,19 +24,18 @@ import {
 const DOMAIN = "https://coffeemanga.net";
 const PAGE_SIZE = 12;
 
-// Titles and orderings come from the site's own home page rails and the
-// "View all" link each one carries.
+// The home page draws each rail with its own card markup; `order` is the
+// ordering its "View all" link points at, used for paging past the first row.
 const HOME_SECTIONS = [
-  { id: "popular_today", title: "Popular today", order: "trending" },
-  { id: "latest_updates", title: "Latest updates", order: "latest" },
-  { id: "new_series", title: "New Series", order: "new-manga" },
-  { id: "most_read", title: "Most read", order: "views" },
+  { id: "popular_today", title: "Popular today", selector: "a.rcard", order: "trending" },
+  { id: "latest_updates", title: "Latest updates", selector: "div.gcard-w", order: "latest" },
+  { id: "new_series", title: "New Series", selector: "a.fcard", order: "new-manga" },
 ] as const;
 
 const FEATURED = { id: "featured", title: "Featured" };
 
 export const CoffeeMangaInfo: SourceInfo = {
-  version: "2.0.0",
+  version: "3.0.0",
   name: "CoffeeManga",
   icon: "icon.png",
   author: "kittycatgit",
@@ -251,6 +250,46 @@ export class CoffeeManga
     return tiles;
   }
 
+  // Each home rail uses its own card class, so the row is located by selector
+  // and the pieces are read from whichever wrapper that card happens to use.
+  private homeTiles(html: string, selector: string): PartialSourceManga[] {
+    const $ = this.cheerio.load(html);
+    const tiles: PartialSourceManga[] = [];
+    const seen = new Set<string>();
+
+    for (const element of $(selector).toArray()) {
+      const root = $(element);
+      const link = root.is("a") ? root : root.find("a").first();
+      const slug = this.slugOf(link.attr("href") ?? "");
+      const title = this.decode(
+        (link.attr("title") ?? "") || root.find("div.rt, div.g-t, div.fc-t").first().text(),
+      );
+
+      if (!slug || slug === "feed" || !title || seen.has(slug)) {
+        continue;
+      }
+
+      seen.add(slug);
+
+      // The label carries a "New" badge inside it, which would read as part of
+      // the chapter name.
+      const chapter = this.decode(
+        root.find("span.gc-cl").first().clone().children().remove().end().text(),
+      );
+
+      tiles.push(
+        App.createPartialSourceManga({
+          mangaId: slug,
+          title,
+          image: this.cover(root.find("img")),
+          ...(chapter ? { subtitle: chapter } : {}),
+        }),
+      );
+    }
+
+    return tiles;
+  }
+
   private listingUrl(options: { page: number; order?: string; genre?: string }): string {
     if (options.genre) {
       return `${DOMAIN}/manga-genre/${options.genre}/page/${options.page}/${
@@ -285,23 +324,26 @@ export class CoffeeManga
     return false;
   }
 
+  // One request paints the whole screen: every rail is already on the home page,
+  // so fetching a listing per row would just stack round trips.
   async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
-    sectionCallback(
-      App.createHomeSection({
-        id: FEATURED.id,
-        title: FEATURED.title,
-        type: HomeSectionType.singleRowLarge,
-        containsMoreItems: false,
-      }),
-    );
+    const rows = [
+      { id: FEATURED.id, title: FEATURED.title, type: HomeSectionType.singleRowLarge, more: false },
+      ...HOME_SECTIONS.map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        type: HomeSectionType.singleRowNormal,
+        more: true,
+      })),
+    ];
 
-    for (const entry of HOME_SECTIONS) {
+    for (const row of rows) {
       sectionCallback(
         App.createHomeSection({
-          id: entry.id,
-          title: entry.title,
-          type: HomeSectionType.singleRowNormal,
-          containsMoreItems: true,
+          id: row.id,
+          title: row.title,
+          type: row.type,
+          containsMoreItems: row.more,
         }),
       );
     }
@@ -325,7 +367,7 @@ export class CoffeeManga
           title: entry.title,
           type: HomeSectionType.singleRowNormal,
           containsMoreItems: true,
-          items: this.cards(await this.fetch(this.listingUrl({ page: 1, order: entry.order }))),
+          items: this.homeTiles(home, entry.selector),
         }),
       );
     }
