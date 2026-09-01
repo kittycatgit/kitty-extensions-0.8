@@ -74,7 +74,7 @@ interface Book {
 }
 
 export const RawkumaInfo: SourceInfo = {
-  version: "5.0.0",
+  version: "6.0.0",
   name: "Rawkuma",
   icon: "icon.png",
   author: "kittycatgit",
@@ -99,7 +99,6 @@ export class Rawkuma
   constructor(public cheerio: CheerioAPI) {}
 
   readonly requestManager: RequestManager = App.createRequestManager({
-    requestsPerSecond: 4,
     requestTimeout: 20_000,
     interceptor: {
       interceptRequest: async (request: Request): Promise<Request> => {

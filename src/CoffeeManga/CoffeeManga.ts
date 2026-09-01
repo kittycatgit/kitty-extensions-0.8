@@ -36,7 +36,7 @@ const HOME_SECTIONS = [
 const FEATURED = { id: "featured", title: "Featured" };
 
 export const CoffeeMangaInfo: SourceInfo = {
-  version: "1.0.0",
+  version: "2.0.0",
   name: "CoffeeManga",
   icon: "icon.png",
   author: "kittycatgit",
@@ -61,7 +61,6 @@ export class CoffeeManga
   constructor(public cheerio: CheerioAPI) {}
 
   readonly requestManager: RequestManager = App.createRequestManager({
-    requestsPerSecond: 4,
     requestTimeout: 20_000,
     interceptor: {
       interceptRequest: async (request: Request): Promise<Request> => {
