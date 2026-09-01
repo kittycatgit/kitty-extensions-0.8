@@ -1530,7 +1530,7 @@ var _Sources = (() => {
 
   // src/Kagane/Kagane.ts
   var KaganeInfo = {
-    version: "3.0.0",
+    version: "4.0.0",
     name: "Kagane",
     icon: "icon.png",
     author: "kittycatgit",
@@ -1858,7 +1858,8 @@ var _Sources = (() => {
       if (books.length === 0) {
         throw new Error(`No chapters were listed for ${mangaId}.`);
       }
-      return books.map((book, index) => {
+      const ordered = [...books].sort((left, right) => left.sort_no - right.sort_no);
+      return ordered.map((book, index) => {
         const groupName = book.groups?.map((group) => group.title).join(", ") || source?.title || "";
         const time = book.created_at ? new Date(book.created_at) : void 0;
         const chapterNumber = Number(book.chapter_no);
@@ -1866,7 +1867,7 @@ var _Sources = (() => {
         return App.createChapter({
           id: book.book_id,
           chapNum: Number.isFinite(chapterNumber) ? chapterNumber : book.sort_no,
-          sortingIndex: books.length - index,
+          sortingIndex: index,
           langCode: "en",
           ...book.title ? { name: book.title } : {},
           ...Number.isFinite(volume) ? { volume } : {},
