@@ -743,6 +743,8 @@ var _Sources = (() => {
   var TAG_MATCH_ALL_KEY = "kagane-tag-match-all";
   var HIDDEN_TAG_CATEGORIES_KEY = "kagane-hidden-tag-categories";
   var CUSTOM_HIDDEN_TAGS_KEY = "kagane-custom-hidden-tags";
+  var TAGS_CACHE_KEY = "kagane-tags-cache";
+  var TAGS_CACHE_DATE_KEY = "kagane-tags-cache-date";
   var CONTENT_RATINGS = ["Safe", "Suggestive", "Erotica", "Pornographic"];
   var DEFAULT_RATINGS = ["Safe", "Suggestive"];
   var SOURCE_DISPLAY_MODES = [
@@ -1292,6 +1294,12 @@ var _Sources = (() => {
       if (this.taxonomy && Date.now() - this.taxonomy.at < TAXONOMY_TTL_MS) {
         return this.taxonomy.value;
       }
+      this.pendingTaxonomy ??= this.loadTaxonomy().finally(() => {
+        this.pendingTaxonomy = void 0;
+      });
+      return this.pendingTaxonomy;
+    }
+    async loadTaxonomy() {
       const [genres, sources] = await Promise.all([
         this.fetchJSON(`${API_URL}/genres/list`),
         this.fetchJSON(`${API_URL}/sources/list`, {
@@ -1308,11 +1316,45 @@ var _Sources = (() => {
       if (this.tags && Date.now() - this.tags.at < TAXONOMY_TTL_MS) {
         return this.tags.value;
       }
+      this.pendingTags ??= this.loadTags().finally(() => {
+        this.pendingTags = void 0;
+      });
+      return this.pendingTags;
+    }
+    async loadTags() {
+      const cached = await this.readCachedTags();
+      if (cached) {
+        this.tags = { at: Date.now(), value: cached };
+        return cached;
+      }
       const tags = (await this.fetchJSON(`${API_URL}/tags/list`)).filter(
         (tag) => tag.id && tag.tag_name
       );
       this.tags = { at: Date.now(), value: tags };
+      try {
+        await stateManager().store(TAGS_CACHE_KEY, JSON.stringify(tags));
+        await stateManager().store(TAGS_CACHE_DATE_KEY, Date.now());
+      } catch {
+      }
       return tags;
+    }
+    async readCachedTags() {
+      try {
+        const at = Number(await stateManager().retrieve(TAGS_CACHE_DATE_KEY) ?? 0);
+        const raw = await stateManager().retrieve(TAGS_CACHE_KEY);
+        if (typeof raw !== "string" || Date.now() - at > TAXONOMY_TTL_MS) {
+          return void 0;
+        }
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) && parsed.length > 0 ? parsed : void 0;
+      } catch {
+        return void 0;
+      }
+    }
+    // Fire-and-forget: pulls the taxonomy into memory so the filter sheet opens
+    // without waiting on it. Never surfaces an error and never blocks a caller.
+    warm() {
+      void this.getTags().catch(() => void 0);
     }
     // Lower-cased name to id, for resolving tag names typed into settings.
     async getTagIdsByName() {
@@ -1487,7 +1529,7 @@ var _Sources = (() => {
 
   // src/Kagane/Kagane.ts
   var KaganeInfo = {
-    version: "1.0.0",
+    version: "2.0.0",
     name: "Kagane",
     icon: "icon.png",
     author: "kittycatgit",
@@ -1590,6 +1632,17 @@ var _Sources = (() => {
       }
       return true;
     }
+    // Only a few hundred of the ~8,500 tags fit in a picker, so this reaches the
+    // rest by name. A leading "-" excludes: "romance, -gore".
+    async getSearchFields() {
+      return [
+        App.createSearchField({
+          id: "tags_text",
+          name: "Tags",
+          placeholder: "romance, -gore"
+        })
+      ];
+    }
     async supportsTagExclusion() {
       return true;
     }
@@ -1634,16 +1687,31 @@ var _Sources = (() => {
       }
       const includedTags = this.split(query?.includedTags, "tag");
       const excludedTags = [...this.split(query?.excludedTags, "tag"), ...hiddenTagIds];
-      if (customHidden.length > 0) {
+      const typed = this.parseTypedTags(String(query?.parameters?.["tags_text"] ?? ""));
+      const names = [...customHidden, ...typed.included, ...typed.excluded];
+      if (names.length > 0) {
         const byName = await this.api.getTagIdsByName();
-        excludedTags.push(
-          ...customHidden.map((name) => byName[name.toLowerCase()] ?? "").filter(Boolean)
-        );
+        const resolve = (list) => list.map((name) => byName[name.toLowerCase()] ?? "").filter(Boolean);
+        includedTags.push(...resolve(typed.included));
+        excludedTags.push(...resolve(customHidden), ...resolve(typed.excluded));
       }
       if (includedTags.length > 0 || excludedTags.length > 0) {
         body.tags = this.compound(includedTags, excludedTags, matchAll);
       }
       return body;
+    }
+    parseTypedTags(input) {
+      const included = [];
+      const excluded = [];
+      for (const entry of input.split(",")) {
+        const trimmed = entry.trim();
+        const exclude = trimmed.startsWith("-");
+        const name = (exclude ? trimmed.slice(1) : trimmed).trim();
+        if (name) {
+          (exclude ? excluded : included).push(name);
+        }
+      }
+      return { included, excluded };
     }
     compound(included, excluded, matchAll) {
       return {
@@ -1657,14 +1725,14 @@ var _Sources = (() => {
       if (sort && sort !== "relevance") {
         parts.push(`sort=${sort}`);
       }
-      const [data, sources, showSource] = await Promise.all([
+      const showSource = await getShowSource();
+      const [data, sources] = await Promise.all([
         this.api.fetchJSON(`${API_URL}/search/series?${parts.join("&")}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body)
         }),
-        this.api.getTaxonomy().then((taxonomy) => taxonomy.sources).catch(() => []),
-        getShowSource()
+        showSource ? this.api.getTaxonomy().then((taxonomy) => taxonomy.sources).catch(() => []) : Promise.resolve([])
       ]);
       const titles = new Map(sources.map((source) => [source.source_id, source.title]));
       const results = (data.content ?? []).map((book) => {
@@ -1712,6 +1780,7 @@ var _Sources = (() => {
           })
         );
       }
+      this.api.warm();
     }
     async getViewMoreItems(homepageSectionId, metadata) {
       const entry = HOME_SECTIONS.find((row) => row.id === homepageSectionId);
