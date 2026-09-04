@@ -1530,7 +1530,7 @@ var _Sources = (() => {
 
   // src/Kagane/Kagane.ts
   var KaganeInfo = {
-    version: "4.0.0",
+    version: "1.0.0-alpha.5",
     name: "Kagane",
     icon: "icon.png",
     author: "kittycatgit",

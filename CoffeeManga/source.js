@@ -737,7 +737,7 @@ var _Sources = (() => {
   ];
   var FEATURED = { id: "featured", title: "Featured" };
   var CoffeeMangaInfo = {
-    version: "3.0.0",
+    version: "1.0.0-alpha.4",
     name: "CoffeeManga",
     icon: "icon.png",
     author: "kittycatgit",

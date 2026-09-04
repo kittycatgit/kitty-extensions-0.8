@@ -737,7 +737,7 @@ var _Sources = (() => {
     { id: "views", title: "Most Popular", order: "views" }
   ];
   var manga3asqInfo = {
-    version: "1.0.0",
+    version: "1.0.0-alpha.2",
     name: "manga3asq",
     icon: "icon.png",
     author: "kittycatgit",
