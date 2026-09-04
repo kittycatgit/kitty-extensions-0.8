@@ -33,7 +33,7 @@ const HOME_SECTIONS = [
 ] as const;
 
 export const manga3asqInfo: SourceInfo = {
-  version: "1.0.0",
+  version: "1.0.0-alpha.2",
   name: "manga3asq",
   icon: "icon.png",
   author: "kittycatgit",

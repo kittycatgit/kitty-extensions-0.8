@@ -35,7 +35,7 @@ const HOME_SECTIONS = [
 const FEATURED = { id: "featured", title: "Featured" };
 
 export const CoffeeMangaInfo: SourceInfo = {
-  version: "3.0.0",
+  version: "1.0.0-alpha.4",
   name: "CoffeeManga",
   icon: "icon.png",
   author: "kittycatgit",
