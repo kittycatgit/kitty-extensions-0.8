@@ -6,6 +6,7 @@ Paperback 0.8 extensions.
 
 - [CoffeeManga](https://coffeemanga.net)
 - [Kagane](https://kagane.to)
+- [manga3asq](https://3asq.online) — Arabic
 - [Rawkuma](https://rawkuma.net)
 
 ## Install
