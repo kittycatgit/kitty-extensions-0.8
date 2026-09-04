@@ -51,7 +51,7 @@ import {
 import { POPULAR_TAG_NAMES } from "./tags";
 
 export const KaganeInfo: SourceInfo = {
-  version: "1.0.0-alpha.5",
+  version: "5.0.0",
   name: "Kagane",
   icon: "icon.png",
   author: "kittycatgit",

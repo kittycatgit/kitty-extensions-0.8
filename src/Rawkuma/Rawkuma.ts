@@ -74,7 +74,7 @@ interface Book {
 }
 
 export const RawkumaInfo: SourceInfo = {
-  version: "1.0.0-alpha.7",
+  version: "7.0.0",
   name: "Rawkuma",
   icon: "icon.png",
   author: "kittycatgit",
