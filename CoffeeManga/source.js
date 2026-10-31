@@ -728,23 +728,442 @@ var _Sources = (() => {
     CoffeeMangaInfo: () => CoffeeMangaInfo
   });
   var import_types = __toESM(require_lib());
+
+  // src/CoffeeManga/crypto.ts
+  var K = new Uint32Array([
+    1116352408,
+    1899447441,
+    3049323471,
+    3921009573,
+    961987163,
+    1508970993,
+    2453635748,
+    2870763221,
+    3624381080,
+    310598401,
+    607225278,
+    1426881987,
+    1925078388,
+    2162078206,
+    2614888103,
+    3248222580,
+    3835390401,
+    4022224774,
+    264347078,
+    604807628,
+    770255983,
+    1249150122,
+    1555081692,
+    1996064986,
+    2554220882,
+    2821834349,
+    2952996808,
+    3210313671,
+    3336571891,
+    3584528711,
+    113926993,
+    338241895,
+    666307205,
+    773529912,
+    1294757372,
+    1396182291,
+    1695183700,
+    1986661051,
+    2177026350,
+    2456956037,
+    2730485921,
+    2820302411,
+    3259730800,
+    3345764771,
+    3516065817,
+    3600352804,
+    4094571909,
+    275423344,
+    430227734,
+    506948616,
+    659060556,
+    883997877,
+    958139571,
+    1322822218,
+    1537002063,
+    1747873779,
+    1955562222,
+    2024104815,
+    2227730452,
+    2361852424,
+    2428436474,
+    2756734187,
+    3204031479,
+    3329325298
+  ]);
+  var rotr = (x, n) => x >>> n | x << 32 - n;
+  function sha256(message) {
+    const length = message.length;
+    const padded = new Uint8Array(length + 9 + 63 >> 6 << 6 >>> 0);
+    padded.set(message);
+    padded[length] = 128;
+    const view = new DataView(padded.buffer);
+    const bits = length * 8;
+    view.setUint32(padded.length - 8, Math.floor(bits / 4294967296));
+    view.setUint32(padded.length - 4, bits >>> 0);
+    const h = new Uint32Array([
+      1779033703,
+      3144134277,
+      1013904242,
+      2773480762,
+      1359893119,
+      2600822924,
+      528734635,
+      1541459225
+    ]);
+    const w = new Uint32Array(64);
+    for (let offset = 0; offset < padded.length; offset += 64) {
+      for (let i = 0; i < 16; i++) {
+        w[i] = view.getUint32(offset + i * 4);
+      }
+      for (let i = 16; i < 64; i++) {
+        const w15 = w[i - 15];
+        const w2 = w[i - 2];
+        const s0 = rotr(w15, 7) ^ rotr(w15, 18) ^ w15 >>> 3;
+        const s1 = rotr(w2, 17) ^ rotr(w2, 19) ^ w2 >>> 10;
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1 >>> 0;
+      }
+      let [a, b, c, d, e, f, g, hh] = h;
+      for (let i = 0; i < 64; i++) {
+        const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+        const ch = e & f ^ ~e & g;
+        const t1 = hh + S1 + ch + K[i] + w[i] >>> 0;
+        const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+        const maj = a & b ^ a & c ^ b & c;
+        const t2 = S0 + maj >>> 0;
+        hh = g;
+        g = f;
+        f = e;
+        e = d + t1 >>> 0;
+        d = c;
+        c = b;
+        b = a;
+        a = t1 + t2 >>> 0;
+      }
+      h[0] = h[0] + a >>> 0;
+      h[1] = h[1] + b >>> 0;
+      h[2] = h[2] + c >>> 0;
+      h[3] = h[3] + d >>> 0;
+      h[4] = h[4] + e >>> 0;
+      h[5] = h[5] + f >>> 0;
+      h[6] = h[6] + g >>> 0;
+      h[7] = h[7] + hh >>> 0;
+    }
+    const digest = new Uint8Array(32);
+    const out = new DataView(digest.buffer);
+    for (let i = 0; i < 8; i++) {
+      out.setUint32(i * 4, h[i]);
+    }
+    return digest;
+  }
+  function hmacSha256(key, message) {
+    const normalised = key.length > 64 ? sha256(key) : key;
+    const inner = new Uint8Array(64 + message.length);
+    const outer = new Uint8Array(96);
+    for (let i = 0; i < 64; i++) {
+      const byte = normalised[i] ?? 0;
+      inner[i] = byte ^ 54;
+      outer[i] = byte ^ 92;
+    }
+    inner.set(message, 64);
+    outer.set(sha256(inner), 64);
+    return sha256(outer);
+  }
+  function utf8Encode(text) {
+    const bytes = [];
+    for (let i = 0; i < text.length; i++) {
+      let code = text.charCodeAt(i);
+      if (code >= 55296 && code <= 56319 && i + 1 < text.length) {
+        code = 65536 + (code - 55296 << 10) + (text.charCodeAt(++i) - 56320);
+      }
+      if (code < 128) {
+        bytes.push(code);
+      } else if (code < 2048) {
+        bytes.push(192 | code >> 6, 128 | code & 63);
+      } else if (code < 65536) {
+        bytes.push(224 | code >> 12, 128 | code >> 6 & 63, 128 | code & 63);
+      } else {
+        bytes.push(
+          240 | code >> 18,
+          128 | code >> 12 & 63,
+          128 | code >> 6 & 63,
+          128 | code & 63
+        );
+      }
+    }
+    return Uint8Array.from(bytes);
+  }
+  function utf8Decode(bytes) {
+    let text = "";
+    for (let i = 0; i < bytes.length; ) {
+      const byte = bytes[i];
+      let code = byte;
+      let extra = 0;
+      if (byte >= 240) {
+        code = byte & 7;
+        extra = 3;
+      } else if (byte >= 224) {
+        code = byte & 15;
+        extra = 2;
+      } else if (byte >= 192) {
+        code = byte & 31;
+        extra = 1;
+      }
+      i++;
+      for (let j = 0; j < extra && i < bytes.length; j++, i++) {
+        code = code << 6 | bytes[i] & 63;
+      }
+      text += String.fromCodePoint(code);
+    }
+    return text;
+  }
+  var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  function base64Decode(input) {
+    const clean = input.replace(/-/g, "+").replace(/_/g, "/").replace(/[^A-Za-z0-9+/]/g, "");
+    const bytes = [];
+    let buffer = 0;
+    let bits = 0;
+    for (const char of clean) {
+      buffer = buffer << 6 | B64.indexOf(char);
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        bytes.push(buffer >> bits & 255);
+      }
+    }
+    return Uint8Array.from(bytes);
+  }
+  function hexDecode(hex) {
+    const bytes = [];
+    for (const pair of hex.match(/../g) ?? []) {
+      bytes.push(parseInt(pair, 16));
+    }
+    return Uint8Array.from(bytes);
+  }
+
+  // src/CoffeeManga/reader.ts
   var DOMAIN = "https://coffeemanga.net";
-  var PAGE_SIZE = 12;
-  var HOME_SECTIONS = [
-    { id: "popular_today", title: "Popular today", selector: "a.rcard", order: "trending" },
-    { id: "latest_updates", title: "Latest updates", selector: "div.gcard-w", order: "latest" },
-    { id: "new_series", title: "New Series", selector: "a.fcard", order: "new-manga" }
+  var HOST = "coffeemanga.net";
+  function appScriptUrl(html) {
+    const match = /<script[^>]+src="([^"]*\/app-[^"]+\.js)"/.exec(html);
+    if (!match) {
+      throw new Error("The reader page no longer links its app bundle.");
+    }
+    return match[1];
+  }
+  function deriveKey(bundle) {
+    const header = /function \w*\(\)\{const (\w+)=new Uint8Array\(32\),(\w+)=document\.documentElement\.tagName;return /.exec(
+      bundle
+    );
+    if (!header) {
+      throw new Error("The reader key function was not found in the app bundle.");
+    }
+    const [, out, tag] = header;
+    const start = header.index + header[0].length;
+    const end = bundle.indexOf(`,${out}}`, start);
+    if (end < 0) {
+      throw new Error("The reader key function has an unexpected shape.");
+    }
+    const expressions = [];
+    for (const piece of bundle.slice(start, end).split(new RegExp(`,(?=${out}\\[\\d+\\]=)`))) {
+      const match = new RegExp(`^${out}\\[(\\d+)\\]=(?:\\((.+)\\)|(.+))&255$`).exec(piece);
+      if (!match) {
+        throw new Error(`Unreadable reader key assignment: ${piece}`);
+      }
+      expressions.push({ target: Number(match[1]), text: match[2] ?? match[3] });
+    }
+    if (expressions.length !== 32) {
+      throw new Error(`Expected 32 reader key assignments, found ${expressions.length}.`);
+    }
+    const tableName = /(\w+)\[\d+\]/.exec(expressions[0].text)?.[1];
+    const table = tableName ? new RegExp(`[^\\w$]${tableName}=\\[([\\d,]+)\\]`).exec(bundle)?.[1] : void 0;
+    if (!tableName || !table) {
+      throw new Error("The reader key table was not found in the app bundle.");
+    }
+    const constants = table.split(",").map(Number);
+    const tagName = "HTML";
+    const operand = (token) => {
+      const index = new RegExp(`^${tableName}\\[(\\d+)\\]$`).exec(token);
+      if (index) {
+        return constants[Number(index[1])] ?? 0;
+      }
+      const char = new RegExp(`^${tag}\\.charCodeAt\\((\\d+)\\)$`).exec(token);
+      if (char) {
+        return tagName.charCodeAt(Number(char[1]));
+      }
+      if (/^\d+$/.test(token)) {
+        return Number(token);
+      }
+      throw new Error(`Unreadable reader key operand: ${token}`);
+    };
+    const key = new Uint8Array(32);
+    for (const expression of expressions) {
+      let value = 0;
+      for (const [i, segment] of expression.text.split("^").entries()) {
+        const tokens = segment.match(/[+-]|[^+-]+/g) ?? [];
+        let sum = operand(tokens[0].trim());
+        for (let j = 1; j + 1 < tokens.length; j += 2) {
+          const right = operand(tokens[j + 1].trim());
+          sum = tokens[j] === "+" ? sum + right : sum - right;
+        }
+        value = i === 0 ? sum : value ^ sum;
+      }
+      key[expression.target] = value & 255;
+    }
+    return key;
+  }
+  function readerConfig(token, chapterId, key) {
+    const chapterKey = hmacSha256(key, utf8Encode(`rk|${HOST}|${chapterId}`));
+    const bytes = base64Decode(token);
+    for (let offset = 0, block = 0; offset < bytes.length; offset += 32, block++) {
+      const mask = hmacSha256(chapterKey, utf8Encode(`ks|${block}`));
+      for (let i = 0; i < 32 && offset + i < bytes.length; i++) {
+        bytes[offset + i] = bytes[offset + i] ^ mask[i];
+      }
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(utf8Decode(bytes));
+    } catch {
+      throw new Error("The reader token did not decrypt; the site's key derivation changed.");
+    }
+    const params = Array.isArray(parsed.p) ? parsed.p : [];
+    if (typeof parsed.e !== "string" || params.length !== 3 || !params.every((item) => typeof item === "string") || typeof parsed.v !== "number" || typeof parsed.k !== "string" || typeof parsed.q !== "string") {
+      throw new Error("The reader token has an unexpected shape.");
+    }
+    return {
+      endpoint: parsed.e,
+      params,
+      version: parsed.v,
+      key: parsed.k,
+      query: parsed.q
+    };
+  }
+  function manifestUrl(config, chapterId, slug) {
+    return `${DOMAIN}/${config.endpoint}/${chapterId}?${config.params[0]}=${encodeURIComponent(
+      slug
+    )}&${config.params[2]}=${encodeURIComponent(config.query)}`;
+  }
+  function manifestPages(body, config, chapterId) {
+    const envelope = Math.floor(config.version / 3);
+    const encoding = config.version % 3;
+    const raw = JSON.parse(body);
+    let candidate = raw;
+    if (envelope === 1 && Array.isArray(raw)) {
+      candidate = { c: raw[0], e: raw[1], d: raw[2], s: raw[3] };
+    } else if (envelope === 2 && raw && typeof raw === "object") {
+      candidate = raw.r;
+    }
+    const manifest = candidate;
+    if (!manifest || typeof manifest.c !== "number" || typeof manifest.d !== "string" || manifest.c !== chapterId) {
+      throw new Error("The chapter manifest has an unexpected shape.");
+    }
+    let text = manifest.d;
+    if (encoding === 1) {
+      text = utf8Decode(base64Decode(manifest.d));
+    } else if (encoding === 2) {
+      const mask = hexDecode(config.key);
+      const bytes = base64Decode(manifest.d);
+      if (mask.length > 0) {
+        for (let i = 0; i < bytes.length; i++) {
+          bytes[i] = bytes[i] ^ mask[i % mask.length];
+        }
+      }
+      text = utf8Decode(bytes);
+    }
+    const entries = JSON.parse(text);
+    if (!Array.isArray(entries)) {
+      throw new Error("The chapter manifest holds no page list.");
+    }
+    return entries.filter((entry) => entry && typeof entry.n === "number").sort((a, b) => a.n - b.n).map((entry) => widest(entry.srcset ?? "") || (entry.src ?? "").trim()).filter((url) => url.length > 0);
+  }
+  function widest(srcset) {
+    let best = "";
+    let width = -1;
+    for (const candidate of srcset.split(",")) {
+      const [url, size] = candidate.trim().split(/\s+/);
+      const parsed = Number((size ?? "").replace(/[^0-9]/g, ""));
+      if (url && parsed > width) {
+        best = url;
+        width = parsed;
+      }
+    }
+    return best;
+  }
+
+  // src/CoffeeManga/CoffeeManga.ts
+  var DOMAIN2 = "https://coffeemanga.net";
+  var CHAPTER_BATCH = 4;
+  var HOME_ROWS = [
+    { id: "featured", title: "Featured", type: import_types.HomeSectionType.singleRowLarge, code: "heroes" },
+    {
+      id: "latest",
+      title: "Latest updates",
+      type: import_types.HomeSectionType.singleRowNormal,
+      code: "latest",
+      order: "reciente"
+    },
+    {
+      id: "reading_now",
+      title: "Most read right now",
+      type: import_types.HomeSectionType.singleRowNormal,
+      code: "reading_now"
+    },
+    {
+      id: "trending",
+      title: "Popular this week",
+      type: import_types.HomeSectionType.singleRowLarge,
+      code: "trending"
+    },
+    {
+      id: "newest",
+      title: "Newly added",
+      type: import_types.HomeSectionType.singleRowNormal,
+      code: "newest",
+      order: "nuevas"
+    }
   ];
-  var FEATURED = { id: "featured", title: "Featured" };
+  var LIBRARY_ROWS = [
+    { id: "most_viewed", title: "Most viewed", order: "vistas" },
+    { id: "top_rated", title: "Top rated", order: "valoradas" },
+    { id: "most_followed", title: "Most followed", order: "seguidas" }
+  ];
+  var FILTERS = [
+    {
+      id: "type",
+      label: "Type",
+      param: "tipo",
+      items: ["manga", "manhwa", "manhua", "webtoon", "novel"]
+    },
+    {
+      id: "status",
+      label: "Status",
+      param: "estado",
+      items: ["ongoing", "completed", "hiatus", "cancelled"]
+    },
+    { id: "section", label: "Section", param: "seccion", items: ["shoujo", "shounen"] }
+  ];
+  var STATUS_LABELS = {
+    ongoing: "Ongoing",
+    completed: "Completed",
+    hiatus: "Hiatus",
+    cancelled: "Cancelled"
+  };
+  var MISSING_COVER = `${DOMAIN2}/image/none.webp`;
   var CoffeeMangaInfo = {
-    version: "4.0.0",
+    version: "5.0.0",
     name: "CoffeeManga",
     icon: "icon.png",
     author: "kittycatgit",
     authorWebsite: "https://github.com/kittycatgit",
     description: "Extension that pulls content from coffeemanga.net.",
     contentRating: import_types.ContentRating.MATURE,
-    websiteBaseURL: DOMAIN,
+    websiteBaseURL: DOMAIN2,
     language: "en",
     intents: import_types.SourceIntents.MANGA_CHAPTERS | import_types.SourceIntents.HOMEPAGE_SECTIONS | import_types.SourceIntents.CLOUDFLARE_BYPASS_REQUIRED
   };
@@ -754,11 +1173,13 @@ var _Sources = (() => {
       this.requestManager = App.createRequestManager({
         requestTimeout: 2e4,
         interceptor: {
+          // Defaults only: the page manifest is refused unless its referer is the
+          // chapter page, so a caller's own headers win.
           interceptRequest: async (request) => {
             request.headers = {
-              ...request.headers,
-              referer: `${DOMAIN}/`,
-              "user-agent": await this.requestManager.getDefaultUserAgent()
+              referer: `${DOMAIN2}/`,
+              "user-agent": await this.requestManager.getDefaultUserAgent(),
+              ...request.headers
             };
             return request;
           },
@@ -768,199 +1189,118 @@ var _Sources = (() => {
     }
     async getCloudflareBypassRequestAsync() {
       return App.createRequest({
-        url: DOMAIN,
+        url: DOMAIN2,
         method: "GET",
         headers: {
-          referer: `${DOMAIN}/`,
+          referer: `${DOMAIN2}/`,
           "user-agent": await this.requestManager.getDefaultUserAgent()
         }
       });
     }
     getMangaShareUrl(mangaId) {
-      return `${DOMAIN}/manga/${mangaId}/`;
+      return `${DOMAIN2}/manga/${mangaId}/`;
     }
-    async fetch(url, method = "GET") {
-      const response = await this.requestManager.schedule(App.createRequest({ url, method }), 1);
+    async fetch(url, headers = {}) {
+      const response = await this.requestManager.schedule(
+        App.createRequest({ url, method: "GET", headers }),
+        1
+      );
+      if (response.status === 428) {
+        throw new Error("The site is asking for a browser verification before serving pages.");
+      }
+      if (response.status !== 200) {
+        throw new Error(`${url} answered ${response.status}.`);
+      }
       return typeof response.data === "string" ? response.data : String(response.data ?? "");
     }
-    decode(value) {
-      return value.replace(/<[^>]+>/g, "").replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code))).replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").trim();
+    props(html) {
+      const match = /<script data-page="app" type="application\/json">([\s\S]*?)<\/script>/.exec(
+        html
+      );
+      if (!match) {
+        throw new Error("The page carried no Inertia data; the site may have changed or challenged.");
+      }
+      return JSON.parse(match[1] ?? "{}").props;
+    }
+    async page(url) {
+      return this.props(await this.fetch(url));
+    }
+    // The library ignores ?page=; only the /page/N/ path form pages.
+    libraryUrl(page, params) {
+      const query = Object.entries(params).filter(([, value]) => value).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&");
+      return `${DOMAIN2}/manga/${page > 1 ? `page/${page}/` : ""}${query ? `?${query}` : ""}`;
     }
     absolute(url) {
       const trimmed = url.trim();
       if (trimmed.startsWith("//")) {
         return `https:${trimmed}`;
       }
-      return (trimmed.startsWith("/") ? `${DOMAIN}${trimmed}` : trimmed).replace(
+      return (trimmed.startsWith("/") ? `${DOMAIN2}${trimmed}` : trimmed).replace(
         /^http:\/\//,
         "https://"
       );
     }
-    slugOf(href) {
-      return (href ?? "").split("?")[0]?.replace(/\/$/, "").split("/").pop()?.trim() ?? "";
+    cover(card) {
+      const best = card.cover_canonical || card.cover_lg || widest(card.cover_srcset ?? "") || card.cover || "";
+      return best ? this.absolute(best) : MISSING_COVER;
     }
-    // Covers are served at several widths and `src` points at the smallest, so
-    // take the widest candidate the srcset offers.
-    cover(node) {
-      const srcset = (node.first().attr("srcset") ?? "").trim();
-      if (srcset) {
-        let best = "";
-        let width = -1;
-        for (const candidate of srcset.split(",")) {
-          const [url, size] = candidate.trim().split(/\s+/);
-          const parsed = Number((size ?? "").replace(/[^0-9]/g, ""));
-          if (url && parsed > width) {
-            best = url;
-            width = parsed;
-          }
-        }
-        if (best) {
-          return this.absolute(best);
-        }
-      }
-      for (const attribute of ["data-src", "data-lazy-src", "src"]) {
-        const value = (node.first().attr(attribute) ?? "").trim();
-        if (value && !value.startsWith("data:")) {
-          return this.absolute(value);
-        }
-      }
-      return `${DOMAIN}/favicon.ico`;
-    }
-    ago(text) {
-      const trimmed = text.trim();
-      const match = /(\d+)\s*(second|minute|hour|day|week|month|year)/i.exec(trimmed);
-      if (!match) {
-        const parsed = new Date(trimmed);
-        return trimmed && !isNaN(parsed.getTime()) ? parsed : void 0;
-      }
-      const spans = {
-        second: 1e3,
-        minute: 6e4,
-        hour: 36e5,
-        day: 864e5,
-        week: 6048e5,
-        month: 26298e5,
-        year: 315576e5
-      };
-      return new Date(Date.now() - Number(match[1]) * (spans[(match[2] ?? "").toLowerCase()] ?? 0));
-    }
-    cards(html) {
-      const $ = this.cheerio.load(html);
-      const results = [];
-      const seen = /* @__PURE__ */ new Set();
-      for (const element of $("a.acard").toArray()) {
-        const slug = this.slugOf($(element).attr("href") ?? "");
-        const title = this.decode(
-          ($(element).attr("title") ?? "") || $(element).find("div.ac-t").first().text()
-        );
-        if (!slug || slug === "feed" || !title || seen.has(slug)) {
-          continue;
-        }
-        seen.add(slug);
-        const chapter = this.decode($(element).find("div.ac-ch").first().text());
-        results.push(
-          App.createPartialSourceManga({
-            mangaId: slug,
-            title,
-            image: this.cover($(element).find("img")),
-            ...chapter ? { subtitle: chapter } : {}
-          })
-        );
-      }
-      return results;
-    }
-    // The hero is built from its own markup rather than the card grid, and its
-    // artwork is a CSS background instead of an <img>.
-    heroTiles(html) {
-      const $ = this.cheerio.load(html);
+    tiles(cards) {
       const tiles = [];
       const seen = /* @__PURE__ */ new Set();
-      for (const element of $("div.hslide").toArray()) {
-        const link = $(element).find("h2.htitle a, h3.htitle a").first();
-        const slug = this.slugOf(link.attr("href") ?? "");
-        const title = this.decode(link.text());
-        if (!slug || slug === "feed" || !title || seen.has(slug)) {
+      for (const card of cards ?? []) {
+        if (!card.slug || !card.title || seen.has(card.slug)) {
           continue;
         }
-        seen.add(slug);
-        const style = $(element).find("div.hslide__bg").first().attr("style") ?? "";
-        const image = /url\(\s*['"]?([^'")]+)/.exec(style)?.[1] ?? "";
+        seen.add(card.slug);
+        const latest = card.chapters?.[0];
+        const subtitle = latest ? latest.published_label ? `${latest.label.trim()} \xB7 ${latest.published_label}` : latest.label.trim() : "";
         tiles.push(
           App.createPartialSourceManga({
-            mangaId: slug,
-            title,
-            image: image ? this.absolute(image) : `${DOMAIN}/favicon.ico`
+            mangaId: card.slug,
+            title: card.title.trim(),
+            image: this.cover(card),
+            ...subtitle ? { subtitle } : {}
           })
         );
       }
       return tiles;
     }
-    // Each home rail uses its own card class, so the row is located by selector
-    // and the pieces are read from whichever wrapper that card happens to use.
-    homeTiles(html, selector) {
-      const $ = this.cheerio.load(html);
-      const tiles = [];
-      const seen = /* @__PURE__ */ new Set();
-      for (const element of $(selector).toArray()) {
-        const root = $(element);
-        const link = root.is("a") ? root : root.find("a").first();
-        const slug = this.slugOf(link.attr("href") ?? "");
-        const title = this.decode(
-          (link.attr("title") ?? "") || root.find("div.rt, div.g-t, div.fc-t").first().text()
-        );
-        if (!slug || slug === "feed" || !title || seen.has(slug)) {
-          continue;
-        }
-        seen.add(slug);
-        const chapter = this.decode(
-          root.find("span.gc-cl").first().clone().children().remove().end().text()
-        );
-        tiles.push(
-          App.createPartialSourceManga({
-            mangaId: slug,
-            title,
-            image: this.cover(root.find("img")),
-            ...chapter ? { subtitle: chapter } : {}
-          })
-        );
-      }
-      return tiles;
-    }
-    listingUrl(options) {
-      if (options.genre) {
-        return `${DOMAIN}/manga-genre/${options.genre}/page/${options.page}/${options.order ? `?m_orderby=${options.order}` : ""}`;
-      }
-      return `${DOMAIN}/manga/page/${options.page}/?m_orderby=${options.order ?? "views"}`;
+    async listing(page, params) {
+      const props = await this.page(this.libraryUrl(page, params));
+      const results = this.tiles(props.series);
+      const last = props.pagination?.last ?? page;
+      return App.createPagedResults({
+        results,
+        metadata: results.length === 0 || page >= last ? void 0 : { page: page + 1 }
+      });
     }
     async getSearchTags() {
-      const $ = this.cheerio.load(await this.fetch(`${DOMAIN}/?s=&post_type=wp-manga`));
-      const tags = [];
-      const seen = /* @__PURE__ */ new Set();
-      for (const element of $('a[href*="/manga-genre/"]').toArray()) {
-        const id = this.slugOf($(element).attr("href") ?? "");
-        const label = this.decode($(element).text());
-        if (id && label && !seen.has(id)) {
-          seen.add(id);
-          tags.push(App.createTag({ id, label }));
-        }
+      const props = await this.page(this.libraryUrl(1, {}));
+      const genres = (props.filters?.genres ?? []).filter((genre) => genre.slug && genre.name).map((genre) => App.createTag({ id: `genre:${genre.slug}`, label: genre.name.trim() }));
+      if (genres.length === 0) {
+        throw new Error("The library page listed no genres.");
       }
-      tags.sort((left, right) => (left.label ?? "").localeCompare(right.label ?? ""));
-      return tags.length > 0 ? [App.createTagSection({ id: "genres", label: "Genres", tags })] : [];
+      const title = (value) => value === "hiatus" ? "On hiatus" : value.charAt(0).toUpperCase() + value.slice(1);
+      return [
+        App.createTagSection({ id: "genre", label: "Genre", tags: genres }),
+        ...FILTERS.map(
+          (filter) => App.createTagSection({
+            id: filter.id,
+            label: filter.label,
+            tags: filter.items.map(
+              (item) => App.createTag({ id: `${filter.id}:${item}`, label: title(item) })
+            )
+          })
+        )
+      ];
     }
     async supportsTagExclusion() {
       return false;
     }
-    // One request paints the whole screen: every rail is already on the home page,
-    // so fetching a listing per row would just stack round trips.
     async getHomePageSections(sectionCallback) {
       const rows = [
-        { id: FEATURED.id, title: FEATURED.title, type: import_types.HomeSectionType.singleRowLarge, more: false },
-        ...HOME_SECTIONS.map((entry) => ({
-          id: entry.id,
-          title: entry.title,
-          type: import_types.HomeSectionType.singleRowNormal,
-          more: true
-        }))
+        ...HOME_ROWS.map((row) => ({ ...row, more: "order" in row })),
+        ...LIBRARY_ROWS.map((row) => ({ ...row, type: import_types.HomeSectionType.singleRowNormal, more: true }))
       ];
       for (const row of rows) {
         sectionCallback(
@@ -972,137 +1312,205 @@ var _Sources = (() => {
           })
         );
       }
-      const home = await this.fetch(`${DOMAIN}/`);
-      sectionCallback(
-        App.createHomeSection({
-          id: FEATURED.id,
-          title: FEATURED.title,
-          type: import_types.HomeSectionType.singleRowLarge,
-          containsMoreItems: false,
-          items: this.heroTiles(home)
-        })
-      );
-      for (const entry of HOME_SECTIONS) {
+      const home = await this.page(`${DOMAIN2}/`);
+      for (const row of HOME_ROWS) {
+        const cards = row.code === "heroes" ? home.heroes : home.sections?.find((section) => section.code === row.code)?.items;
+        if (!cards?.length) {
+          throw new Error(`The home page carried no "${row.title}" rail.`);
+        }
         sectionCallback(
           App.createHomeSection({
-            id: entry.id,
-            title: entry.title,
+            id: row.id,
+            title: row.title,
+            type: row.type,
+            containsMoreItems: "order" in row,
+            items: this.tiles(cards)
+          })
+        );
+      }
+      for (const row of LIBRARY_ROWS) {
+        sectionCallback(
+          App.createHomeSection({
+            id: row.id,
+            title: row.title,
             type: import_types.HomeSectionType.singleRowNormal,
             containsMoreItems: true,
-            items: this.homeTiles(home, entry.selector)
+            items: (await this.listing(1, { orden: row.order })).results
           })
         );
       }
     }
     async getViewMoreItems(homepageSectionId, metadata) {
-      const entry = HOME_SECTIONS.find((row) => row.id === homepageSectionId);
-      if (!entry) {
-        return App.createPagedResults({ results: [] });
+      const row = [...HOME_ROWS, ...LIBRARY_ROWS].find((entry) => entry.id === homepageSectionId);
+      if (!row || !("order" in row)) {
+        throw new Error(`Invalid sectionId provided: ${homepageSectionId}`);
       }
       const page = metadata?.page ?? 1;
-      const results = this.cards(await this.fetch(this.listingUrl({ page, order: entry.order })));
-      return App.createPagedResults({
-        results,
-        metadata: results.length < PAGE_SIZE ? void 0 : { page: page + 1 }
-      });
+      return this.listing(page, { orden: row.order });
     }
+    // /search knows only the title; the library knows every filter but no
+    // title. With both, the filtered listing is matched page by page.
     async getSearchResults(query, metadata) {
       const page = metadata?.page ?? 1;
       const title = (query.title ?? "").trim();
-      const genre = (query.includedTags ?? [])[0]?.id;
-      const html = genre ? await this.fetch(this.listingUrl({ page, genre })) : title ? await this.fetch(
-        `${DOMAIN}/page/${page}/?s=${encodeURIComponent(title)}&post_type=wp-manga`
-      ) : await this.fetch(this.listingUrl({ page }));
-      const found = this.cards(html);
-      const results = genre && title ? found.filter((row) => (row.title ?? "").toLowerCase().includes(title.toLowerCase())) : found;
+      const params = { orden: "reciente" };
+      let tagSlug = "";
+      for (const tag of query.includedTags ?? []) {
+        const [kind, value] = tag.id.split(":", 2);
+        const param = kind === "genre" ? "genero" : FILTERS.find((f) => f.id === kind)?.param;
+        if (kind === "tag" && value) {
+          tagSlug = value;
+        } else if (param && value) {
+          params[param] = value;
+        }
+      }
+      const filtered = Object.keys(params).length > 1;
+      if (tagSlug) {
+        if (filtered) {
+          throw new Error("A tag cannot be combined with other filters on this site.");
+        }
+        const props = await this.page(
+          `${DOMAIN2}/manga-tag/${tagSlug}/${page > 1 ? `page/${page}/` : ""}`
+        );
+        const results = this.tiles(props.series);
+        const last = props.pagination?.last ?? page;
+        return App.createPagedResults({
+          results: title ? results.filter((row) => (row.title ?? "").toLowerCase().includes(title.toLowerCase())) : results,
+          metadata: results.length === 0 || page >= last ? void 0 : { page: page + 1 }
+        });
+      }
+      if (!filtered && title) {
+        const props = await this.page(
+          `${DOMAIN2}/search?q=${encodeURIComponent(title)}${page > 1 ? `&page=${page}` : ""}`
+        );
+        const results = this.tiles(props.series);
+        const last = props.pagination?.last ?? page;
+        return App.createPagedResults({
+          results,
+          metadata: results.length === 0 || page >= last ? void 0 : { page: page + 1 }
+        });
+      }
+      const listing = await this.listing(page, filtered ? params : { orden: "vistas" });
       return App.createPagedResults({
-        results,
-        metadata: found.length < PAGE_SIZE ? void 0 : { page: page + 1 }
+        results: title ? listing.results.filter(
+          (row) => (row.title ?? "").toLowerCase().includes(title.toLowerCase())
+        ) : listing.results,
+        metadata: listing.metadata
       });
     }
     async getMangaDetails(mangaId) {
-      const html = await this.fetch(this.getMangaShareUrl(mangaId));
-      const $ = this.cheerio.load(html);
-      const title = this.decode(
-        $("h1.htitle").first().text() || ($('meta[property="og:title"]').attr("content") ?? "")
-      );
-      const desc = this.decode(
-        ($("p.hsyn").first().text() || ($('meta[property="og:description"]').attr("content") ?? "")).replace(/^Read\s+(manhwa|manhua|manga)\s+/i, "")
-      );
-      const genres = [];
-      const seen = /* @__PURE__ */ new Set();
-      for (const element of $("div.hchips--genres a.chip").toArray()) {
-        const id = this.slugOf($(element).attr("href") ?? "");
-        const label = this.decode($(element).text());
-        if (id && label && !seen.has(id)) {
-          seen.add(id);
-          genres.push(App.createTag({ id, label }));
-        }
+      const props = await this.page(this.getMangaShareUrl(mangaId));
+      const series = props.series;
+      if (!series?.title) {
+        throw new Error(`No series data was returned for ${mangaId}.`);
       }
-      const statusText = $("span.htag--status").first().text();
-      const rating = Number(
-        /[0-9.]+/.exec($("div.hinfo span.rt, div.htag span.rt").first().text())?.[0]
-      );
+      const tagsOf = (prefix, taxa) => (taxa ?? []).filter(
+        (taxon, index, all) => taxon.slug && all.findIndex((t) => t.slug === taxon.slug) === index
+      ).map((taxon) => App.createTag({ id: `${prefix}:${taxon.slug}`, label: taxon.name.trim() }));
+      const genres = tagsOf("genre", series.genres);
+      const tags = tagsOf("tag", series.tags);
+      const nameOf = (entry) => (typeof entry === "string" ? entry : entry.name).trim();
+      const rating = Number(props.rating?.avg);
+      const adult = series.is_adult === true || genres.some((genre) => /^genre:(adult|mature|smut|ecchi|hentai)$/i.test(genre.id));
       return App.createSourceManga({
         id: mangaId,
         mangaInfo: App.createMangaInfo({
-          titles: [title || mangaId],
-          image: this.absolute(
-            $('meta[property="og:image"]').attr("content") ?? `${DOMAIN}/favicon.ico`
+          titles: [series.title.trim(), ...(series.alt_titles ?? []).map((t) => t.trim())].filter(
+            Boolean
           ),
-          desc,
-          status: /complet|finish/i.test(statusText) ? "Completed" : "Ongoing",
+          image: this.cover(series),
+          desc: (series.synopsis ?? "").trim(),
+          status: STATUS_LABELS[series.status ?? ""] ?? "Unknown",
+          hentai: adult,
+          author: (series.authors ?? []).map(nameOf).filter(Boolean).join(", "),
+          artist: (series.artists ?? []).map(nameOf).filter(Boolean).join(", "),
           ...Number.isFinite(rating) && rating > 0 ? { rating } : {},
-          ...genres.length > 0 ? { tags: [App.createTagSection({ id: "genres", label: "Genres", tags: genres })] } : {}
+          tags: [
+            ...genres.length ? [App.createTagSection({ id: "genres", label: "Genres", tags: genres })] : [],
+            ...tags.length ? [App.createTagSection({ id: "tags", label: "Tags", tags })] : []
+          ]
         })
       });
     }
-    // The series page's own chapter JSON is served stale and truncated; this
-    // POST route is uncached and complete.
-    async getChapters(mangaId) {
-      const $ = this.cheerio.load(
-        await this.fetch(`${DOMAIN}/manga/${mangaId}/ajax/chapters/`, "POST")
+    // 20 rows per page, newest first.
+    async chapterPage(mangaId, page) {
+      const body = JSON.parse(
+        await this.fetch(`${DOMAIN2}/manga/${mangaId}/chapters/${page}.json`, {
+          accept: "application/json"
+        })
       );
-      const rows = [];
-      const seen = /* @__PURE__ */ new Set();
-      for (const element of $("li.wp-manga-chapter").toArray()) {
-        const link = $(element).find("a").first();
-        const id = this.slugOf(link.attr("href") ?? "");
-        if (!id || seen.has(id)) {
-          continue;
+      if (!Array.isArray(body.items) || typeof body.last !== "number") {
+        throw new Error(`The chapter list for ${mangaId} has an unexpected shape.`);
+      }
+      return { items: body.items, last: body.last };
+    }
+    async getChapters(mangaId) {
+      const first = await this.chapterPage(mangaId, 1);
+      const rows = [...first.items];
+      for (let page = 2; page <= first.last; page += CHAPTER_BATCH) {
+        const batch = [];
+        for (let n = page; n < page + CHAPTER_BATCH && n <= first.last; n++) {
+          batch.push(this.chapterPage(mangaId, n));
         }
-        seen.add(id);
-        rows.push({
-          id,
-          chapNum: Number(/([0-9]+(?:\.[0-9]+)?)/.exec(this.decode(link.text()))?.[1]) || 0,
-          time: this.ago($(element).find("span.chapter-release-date").first().text())
-        });
+        for (const result of await Promise.all(batch)) {
+          rows.push(...result.items);
+        }
       }
-      if (rows.length === 0) {
-        throw new Error(`No chapters were found for ${mangaId}.`);
+      const seen = /* @__PURE__ */ new Set();
+      const entries = rows.filter((row) => row.slug && !seen.has(row.slug) && seen.add(row.slug)).map((row) => {
+        const explicit = Number(row.number);
+        const chapNum = row.number !== null && row.number !== "" && Number.isFinite(explicit) ? explicit : Number(/([0-9]+(?:\.[0-9]+)?)/.exec(row.label)?.[1] ?? 0);
+        const name = (row.title ?? "").trim();
+        const time = row.published_at ? new Date(row.published_at) : void 0;
+        return {
+          id: row.slug,
+          chapNum,
+          name: row.locked ? name ? `${name} (locked)` : "Locked" : name,
+          time: time && !isNaN(time.getTime()) ? time : void 0
+        };
+      });
+      if (entries.length === 0) {
+        throw new Error(`No chapters were listed for ${mangaId}.`);
       }
-      rows.sort((left, right) => right.chapNum - left.chapNum);
-      return rows.map(
+      entries.sort((left, right) => right.chapNum - left.chapNum);
+      return entries.map(
         (row, index) => App.createChapter({
           id: row.id,
           chapNum: row.chapNum,
           langCode: "en",
-          sortingIndex: rows.length - index,
+          sortingIndex: entries.length - index,
+          ...row.name ? { name: row.name } : {},
           ...row.time ? { time: row.time } : {}
         })
       );
     }
-    async getChapterDetails(mangaId, chapterId) {
-      const $ = this.cheerio.load(await this.fetch(`${DOMAIN}/manga/${mangaId}/${chapterId}/`));
-      const pages = [];
-      for (const element of $("div.page-break img, img.wp-manga-chapter-img").toArray()) {
-        const page = this.cover($(element));
-        if (page && !page.endsWith("favicon.ico") && !pages.includes(page)) {
-          pages.push(page);
-        }
+    async readerKey(scriptUrl) {
+      if (this.keyCache?.url === scriptUrl) {
+        return this.keyCache.key;
       }
+      const key = deriveKey(await this.fetch(scriptUrl));
+      this.keyCache = { url: scriptUrl, key };
+      return key;
+    }
+    // The reader page lists only its first image; the rest come from a manifest
+    // route whose name and parameters sit encrypted in the page props.
+    async getChapterDetails(mangaId, chapterId) {
+      const url = `${DOMAIN2}/manga/${mangaId}/${chapterId}/`;
+      const html = await this.fetch(url);
+      const props = this.props(html);
+      const id = props.chapter?.id;
+      const token = props.reader?.x;
+      if (typeof id !== "number" || !token) {
+        throw new Error(`The reader page for ${chapterId} carried no reader token.`);
+      }
+      const config = readerConfig(token, id, await this.readerKey(appScriptUrl(html)));
+      const body = await this.fetch(manifestUrl(config, id, props.series?.slug ?? mangaId), {
+        accept: "application/json",
+        referer: url
+      });
+      const pages = manifestPages(body, config, id);
       if (pages.length === 0) {
-        throw new Error(`No pages were found for ${chapterId}.`);
+        throw new Error(`No pages were listed for ${chapterId}.`);
       }
       return App.createChapterDetails({ id: chapterId, mangaId, pages });
     }
