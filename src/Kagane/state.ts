@@ -1,13 +1,23 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright © 2026 kittycatgit */
+
 import { SourceStateManager } from "@paperback/types";
 
 import {
+  AGE_RATINGS,
+  CHALLENGE_HOST_KEY,
   CONTENT_LANGUAGES_KEY,
-  CONTENT_RATINGS,
   CONTENT_RATINGS_KEY,
   CUSTOM_HIDDEN_TAGS_KEY,
   DEFAULT_RATINGS,
+  DOMAIN_AT_KEY,
+  DOMAIN_KEY,
+  DOMAIN_OVERRIDE_KEY,
   EXCLUDED_GENRES_KEY,
   HIDDEN_TAG_CATEGORIES_KEY,
+  LEGACY_RATINGS,
+  SHOW_DISTURBING_KEY,
+  SHOW_PORNOGRAPHIC_KEY,
   SHOW_SOURCE_KEY,
   SOURCE_DISPLAY_MODES,
   SOURCE_DISPLAY_MODE_KEY,
@@ -35,21 +45,87 @@ async function readArray(key: string, fallback: string[] = []): Promise<string[]
   return typeof value === "string" && value ? [value] : fallback;
 }
 
-// An older build stored one maximum rating rather than a list. Expanding it to
-// the ladder it implied keeps a reader's visible content identical.
-export async function getContentRatings(): Promise<string[]> {
-  const value = (await stateManager().retrieve(CONTENT_RATINGS_KEY)) as unknown;
+async function readBoolean(key: string, fallback: boolean): Promise<boolean> {
+  const value = (await stateManager().retrieve(key)) as unknown;
 
-  if (typeof value === "string" && value) {
-    const ladder = CONTENT_RATINGS.map((rating) => rating.toLowerCase());
-    const index = ladder.indexOf(value.toLowerCase());
+  return typeof value === "boolean" ? value : fallback;
+}
 
-    return index < 0 ? DEFAULT_RATINGS : CONTENT_RATINGS.slice(0, index + 1);
+function normalizeDomain(value: unknown): string {
+  const trimmed = String(value ?? "").trim();
+
+  if (!trimmed) {
+    return "";
   }
 
-  const list = await readArray(CONTENT_RATINGS_KEY, DEFAULT_RATINGS);
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+  return withScheme.replace(/\/+$/, "");
+}
+
+export async function getDomainOverride(): Promise<string> {
+  return normalizeDomain(await stateManager().retrieve(DOMAIN_OVERRIDE_KEY));
+}
+
+export async function setDomainOverride(value: unknown): Promise<void> {
+  await stateManager().store(DOMAIN_OVERRIDE_KEY, normalizeDomain(value));
+}
+
+export async function getCachedDomain(): Promise<{ domain: string; at: number } | undefined> {
+  const domain = normalizeDomain(await stateManager().retrieve(DOMAIN_KEY));
+  const at = Number((await stateManager().retrieve(DOMAIN_AT_KEY)) ?? 0);
+
+  return domain && at > 0 ? { domain, at } : undefined;
+}
+
+export async function setCachedDomain(domain: string): Promise<void> {
+  await stateManager().store(DOMAIN_KEY, normalizeDomain(domain));
+  await stateManager().store(DOMAIN_AT_KEY, Date.now());
+}
+
+export async function clearCachedDomain(): Promise<void> {
+  await stateManager().store(DOMAIN_KEY, "");
+  await stateManager().store(DOMAIN_AT_KEY, 0);
+}
+
+export async function getChallengeHost(): Promise<string> {
+  return normalizeDomain(await stateManager().retrieve(CHALLENGE_HOST_KEY));
+}
+
+export async function setChallengeHost(origin: string): Promise<void> {
+  await stateManager().store(CHALLENGE_HOST_KEY, normalizeDomain(origin));
+}
+
+// Older builds stored the site's previous rating names, in a list or as one
+// ceiling; both fold onto the age_rating ladder so nothing a reader could see
+// before disappears.
+export async function getContentRatings(): Promise<string[]> {
+  const value = (await stateManager().retrieve(CONTENT_RATINGS_KEY)) as unknown;
+  const stored = Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : typeof value === "string" && value
+      ? [value]
+      : [];
+
+  const valid = new Set<string>(AGE_RATINGS.map((rating) => rating.id));
+  const mapped = stored.map((entry) => LEGACY_RATINGS[entry.toLowerCase()] ?? entry);
+  const list = [...new Set(mapped.filter((entry) => valid.has(entry)))];
+
+  if (typeof value === "string" && list.length === 1) {
+    const index = AGE_RATINGS.findIndex((rating) => rating.id === list[0]);
+
+    return AGE_RATINGS.slice(0, index + 1).map((rating) => rating.id);
+  }
 
   return list.length > 0 ? list : DEFAULT_RATINGS;
+}
+
+export async function getShowPornographic(): Promise<boolean> {
+  return readBoolean(SHOW_PORNOGRAPHIC_KEY, false);
+}
+
+export async function getShowDisturbing(): Promise<boolean> {
+  return readBoolean(SHOW_DISTURBING_KEY, false);
 }
 
 export async function getSourceDisplayMode(): Promise<string> {
@@ -87,9 +163,9 @@ export async function getCustomHiddenTags(): Promise<string[]> {
 }
 
 export async function getShowSource(): Promise<boolean> {
-  return ((await stateManager().retrieve(SHOW_SOURCE_KEY)) as boolean | undefined) ?? false;
+  return readBoolean(SHOW_SOURCE_KEY, false);
 }
 
 export async function getTagMatchAll(): Promise<boolean> {
-  return ((await stateManager().retrieve(TAG_MATCH_ALL_KEY)) as boolean | undefined) ?? false;
+  return readBoolean(TAG_MATCH_ALL_KEY, false);
 }

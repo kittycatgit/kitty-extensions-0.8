@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright © 2026 kittycatgit */
+
 /* Tag data contributed by kittycatgit. */
 
 // The taxonomy is ~8,500 entries; rendering all of them stalls the filter

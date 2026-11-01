@@ -1,14 +1,20 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright © 2026 kittycatgit */
+
 import { DUIFormRow, DUISection } from "@paperback/types";
 
 import { KaganeApi } from "./api";
 import {
+  AGE_RATINGS,
   CONTENT_LANGUAGES_KEY,
-  CONTENT_RATINGS,
   CONTENT_RATINGS_KEY,
   CUSTOM_HIDDEN_TAGS_KEY,
   EXCLUDED_GENRES_KEY,
   HIDDEN_TAG_CATEGORIES_KEY,
   LANGUAGES,
+  MIRRORS_URL,
+  SHOW_DISTURBING_KEY,
+  SHOW_PORNOGRAPHIC_KEY,
   SHOW_SOURCE_KEY,
   SOURCE_DISPLAY_MODES,
   SOURCE_DISPLAY_MODE_KEY,
@@ -18,10 +24,14 @@ import {
   getContentLanguages,
   getContentRatings,
   getCustomHiddenTags,
+  getDomainOverride,
   getExcludedGenres,
+  getShowDisturbing,
+  getShowPornographic,
   getShowSource,
   getSourceDisplayMode,
   getTagMatchAll,
+  setDomainOverride,
   stateManager,
 } from "./state";
 import { HIDDEN_TAG_CATEGORIES } from "./tags";
@@ -76,12 +86,13 @@ export function buildSettings(api: KaganeApi): DUISection {
         label: "Kagane Settings",
         form: App.createDUIForm({
           sections: async () => {
-            const ratingLabels = Object.fromEntries(CONTENT_RATINGS.map((r) => [r, r]));
+            const ratingLabels = Object.fromEntries(AGE_RATINGS.map((r) => [r.id, r.title]));
             const languageLabels = Object.fromEntries(LANGUAGES.map((l) => [l.id, l.title]));
             const modeLabels = Object.fromEntries(SOURCE_DISPLAY_MODES.map((m) => [m.id, m.title]));
             const categoryLabels = Object.fromEntries(
               HIDDEN_TAG_CATEGORIES.map((c) => [c.id, c.title]),
             );
+            const currentDomain = await api.displayDomain();
 
             // Read live so the list matches the server and the stored ids are
             // the UUIDs the search body wants.
@@ -99,20 +110,65 @@ export function buildSettings(api: KaganeApi): DUISection {
 
             return [
               App.createDUISection({
+                id: "domain",
+                header: "Domain",
+                footer: `Kagane moves between domains. The live one is read from ${MIRRORS_URL} and kept for a day; set an override to use a domain as typed instead.`,
+                isHidden: false,
+                rows: async () => [
+                  App.createDUILabel({
+                    id: "current-domain",
+                    label: "Current Domain",
+                    value: currentDomain,
+                  }),
+                  App.createDUIInputField({
+                    id: "domain-override",
+                    label: "Override",
+                    value: App.createDUIBinding({
+                      get: getDomainOverride,
+                      set: async (value) => {
+                        await setDomainOverride(value);
+                        await api.forgetDomain();
+                      },
+                    }),
+                  }),
+                  App.createDUIButton({
+                    id: "recheck-mirrors",
+                    label: "Re-check Mirrors",
+                    onTap: async () => {
+                      await api.forgetDomain();
+                      await api.resolveDomain();
+                    },
+                  }),
+                ],
+              }),
+              App.createDUISection({
                 id: "content",
                 header: "Content",
-                footer: "Titles outside the selected ratings and languages are hidden everywhere.",
+                footer:
+                  "Titles outside the selected ratings and languages are hidden everywhere. Explicit and disturbing titles only show with 18+ selected.",
                 isHidden: false,
                 rows: async () => [
                   select({
                     id: "content-ratings",
-                    label: "Content Ratings",
-                    options: [...CONTENT_RATINGS],
+                    label: "Age Ratings",
+                    options: AGE_RATINGS.map((rating) => rating.id),
                     labels: ratingLabels,
                     read: getContentRatings,
                     key: CONTENT_RATINGS_KEY,
                     multi: true,
                   }),
+                  switchRow(
+                    "show-pornographic",
+                    "Show Explicit Titles",
+                    SHOW_PORNOGRAPHIC_KEY,
+                    getShowPornographic,
+                  ),
+                  switchRow(
+                    "show-disturbing",
+                    "Show Disturbing Titles",
+                    SHOW_DISTURBING_KEY,
+                    getShowDisturbing,
+                  ),
                   select({
                     id: "content-languages",
                     label: "Languages",

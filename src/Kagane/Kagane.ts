@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright © 2026 kittycatgit */
+
 import { CheerioAPI } from "cheerio";
 import {
   Chapter,
@@ -23,42 +26,54 @@ import {
   TagSection,
 } from "@paperback/types";
 
-import { KaganeApi } from "./api";
+import { isCloudflareChallenge, KaganeApi, originOf } from "./api";
 import {
-  API_URL,
-  BASE_URL,
+  DEFAULT_DOMAIN,
   FORMATS,
   HOME_SECTIONS,
-  MISSING_COVER,
+  MIRRORS_URL,
   PAGE_SIZE,
+  SORT_FIELDS,
   UPLOAD_STATUSES,
+  type BookIndexDto,
   type DetailsDto,
+  type SearchBook,
   type SearchDto,
   type SourceDto,
+  type TrendingDto,
 } from "./models";
 import { buildSettings } from "./settings";
 import {
+  getChallengeHost,
   getContentLanguages,
   getContentRatings,
   getCustomHiddenTags,
   getExcludedGenres,
   getHiddenTagIds,
+  getShowDisturbing,
+  getShowPornographic,
   getShowSource,
   getSourceDisplayMode,
   getSourceTypes,
   getTagMatchAll,
+  setChallengeHost,
 } from "./state";
 import { POPULAR_TAG_NAMES } from "./tags";
 
+// null and "" are "not set", which Number() would silently read as 0.
+function numberOrNaN(value: unknown): number {
+  return value === null || value === undefined || value === "" ? NaN : Number(value);
+}
+
 export const KaganeInfo: SourceInfo = {
-  version: "5.0.0",
+  version: "6.0.0",
   name: "Kagane",
   icon: "icon.png",
   author: "kittycatgit",
   authorWebsite: "https://github.com/kittycatgit",
-  description: "Extension that pulls content from kagane.to.",
+  description: "Extension that pulls content from Kagane, on whichever domain kagane.org lists.",
   contentRating: ContentRating.MATURE,
-  websiteBaseURL: BASE_URL,
+  websiteBaseURL: MIRRORS_URL,
   language: "en",
   intents:
     SourceIntents.MANGA_CHAPTERS |
@@ -79,25 +94,44 @@ export class Kagane
   readonly requestManager: RequestManager = App.createRequestManager({
     requestTimeout: 20_000,
     interceptor: {
+      // The page CDN only serves with the site's Origin; the mirrors page and
+      // the API accept their own. Resolving here would recurse, so the domain
+      // already in memory is used and the request's own host otherwise.
       interceptRequest: async (request: Request): Promise<Request> => {
+        const requestOrigin = originOf(request.url);
+        const origin =
+          requestOrigin === MIRRORS_URL.replace(/\/$/, "")
+            ? requestOrigin
+            : this.api.knownDomain || requestOrigin;
+
         request.headers = {
           ...request.headers,
-          origin: BASE_URL,
-          referer: `${BASE_URL}/`,
+          origin,
+          referer: `${origin}/`,
           "user-agent": await this.requestManager.getDefaultUserAgent(),
         };
 
         return request;
       },
-      interceptResponse: async (response) => response,
+      interceptResponse: async (response) => {
+        if (isCloudflareChallenge(response)) {
+          await setChallengeHost(originOf(response.request.url));
+        }
+
+        return response;
+      },
     },
   });
 
   private readonly api = new KaganeApi(this.requestManager);
 
+  // Whichever host challenged last is the one the bypass must clear.
   async getCloudflareBypassRequestAsync(): Promise<Request> {
+    const challenged = await getChallengeHost();
+    const url = challenged || this.api.knownDomain || DEFAULT_DOMAIN;
+
     return App.createRequest({
-      url: BASE_URL,
+      url,
       method: "GET",
       headers: { "user-agent": await this.requestManager.getDefaultUserAgent() },
     });
@@ -107,15 +141,18 @@ export class Kagane
     return buildSettings(this.api);
   }
 
+  // Share links are built before any request runs, so this uses what is known
+  // and the mirrors page when nothing is.
   getMangaShareUrl(mangaId: string): string {
-    return `${BASE_URL}/series/${mangaId}`;
+    const domain = this.api.knownDomain;
+
+    return domain ? `${domain}/series/${mangaId}` : MIRRORS_URL;
   }
 
-  // Some series carry no cover at all on Kagane. The fallback has to be a URL
-  // the app can try and fail on: an empty string blanks the whole row, and the
-  // favicon loads and gets stretched into a blurred logo.
-  private cover(imageId?: string | null): string {
-    return imageId ? `${API_URL}/image/${imageId}/compressed` : MISSING_COVER;
+  // Some series carry no cover at all. The fallback has to be a URL the app can
+  // try and fail on: an empty string blanks the whole row.
+  private cover(domain: string, imageId?: string | null): string {
+    return imageId ? `${domain}/api/v2/image/${imageId}/compressed` : `${domain}/image/none.webp`;
   }
 
   // Tag ids carry the group they came from so the search body can put each one
@@ -137,6 +174,13 @@ export class Kagane
       .sort((left, right) => left.title.localeCompare(right.title));
 
     const sections: TagSection[] = [
+      App.createTagSection({
+        id: "sort",
+        label: "Sort",
+        tags: SORT_FIELDS.map((sort) =>
+          App.createTag({ id: `sort:${sort.id}`, label: sort.title }),
+        ),
+      }),
       App.createTagSection({
         id: "genres",
         label: "Genres",
@@ -188,8 +232,8 @@ export class Kagane
     return true;
   }
 
-  // Only a few hundred of the ~8,500 tags fit in a picker, so this reaches the
-  // rest by name. A leading "-" excludes: "romance, -gore".
+  // Only a few hundred of the thousands of tags fit in a picker, so this
+  // reaches the rest by name. A leading "-" excludes: "romance, -gore".
   async getSearchFields(): Promise<SearchField[]> {
     return [
       App.createSearchField({
@@ -211,22 +255,38 @@ export class Kagane
       .map((id) => id.slice(prefix.length + 1));
   }
 
+  // The explicit and disturbing flags are what the site sends for a signed-out
+  // reader: absent means "show", false means "hide".
   private async searchBody(query?: SearchRequest): Promise<Record<string, unknown>> {
-    const [ratings, languages, sourceTypes, excludedGenres, hiddenTagIds, customHidden, matchAll] =
-      await Promise.all([
-        getContentRatings(),
-        getContentLanguages(),
-        getSourceTypes(),
-        getExcludedGenres(),
-        getHiddenTagIds(),
-        getCustomHiddenTags(),
-        getTagMatchAll(),
-      ]);
+    const [
+      ratings,
+      pornographic,
+      disturbing,
+      languages,
+      sourceTypes,
+      excludedGenres,
+      hiddenTagIds,
+      customHidden,
+      matchAll,
+    ] = await Promise.all([
+      getContentRatings(),
+      getShowPornographic(),
+      getShowDisturbing(),
+      getContentLanguages(),
+      getSourceTypes(),
+      getExcludedGenres(),
+      getHiddenTagIds(),
+      getCustomHiddenTags(),
+      getTagMatchAll(),
+    ]);
 
+    const adult = ratings.includes("EighteenPlus");
     const body: Record<string, unknown> = {
+      age_rating: ratings,
       source_type: sourceTypes,
-      content_rating: ratings,
       content_lang: languages,
+      ...(adult && pornographic ? {} : { is_pornographic: false }),
+      ...(adult && disturbing ? {} : { is_disturbing: false }),
     };
 
     const title = query?.title?.trim();
@@ -259,7 +319,7 @@ export class Kagane
     const excludedTags = [...this.split(query?.excludedTags, "tag"), ...hiddenTagIds];
     const typed = this.parseTypedTags(String(query?.parameters?.["tags_text"] ?? ""));
 
-    // Names are resolved here so the 8,500-entry taxonomy is only fetched when
+    // Names are resolved here so the full taxonomy is only fetched when
     // somebody actually typed one. Names that match nothing drop out quietly.
     const names = [...customHidden, ...typed.included, ...typed.excluded];
     if (names.length > 0) {
@@ -298,9 +358,43 @@ export class Kagane
   private compound(included: string[], excluded: string[], matchAll: boolean) {
     return {
       values: included,
-      ...(matchAll && included.length > 0 ? { match_all: true } : {}),
+      match_all: matchAll && included.length > 0,
       ...(excluded.length > 0 ? { exclude: [...new Set(excluded)] } : {}),
     };
+  }
+
+  private async sourceTitles(): Promise<Map<string, string>> {
+    // The source list is only there to print a name beside the title, so it is
+    // not fetched at all unless that setting is on.
+    if (!(await getShowSource())) {
+      return new Map();
+    }
+
+    const { sources } = await this.api.getTaxonomy();
+
+    return new Map(sources.map((source) => [source.source_id, source.title]));
+  }
+
+  private card(domain: string, book: SearchBook, titles: Map<string, string>): PartialSourceManga {
+    const source = book.source_id ? titles.get(book.source_id) : undefined;
+    const latest = book.latest_chapters?.[0]?.chapter_no;
+    const subtitle = [
+      latest
+        ? `Ch. ${latest}`
+        : typeof book.current_books === "number"
+          ? `${book.current_books} Chapters`
+          : "",
+      book.start_year ? String(book.start_year) : "",
+    ]
+      .filter(Boolean)
+      .join(" • ");
+
+    return App.createPartialSourceManga({
+      mangaId: book.series_id,
+      title: source ? `${book.title.trim()} [${source}]` : book.title.trim(),
+      image: this.cover(domain, book.cover_image_id),
+      ...(subtitle ? { subtitle } : {}),
+    });
   }
 
   private async series(
@@ -310,80 +404,89 @@ export class Kagane
   ): Promise<{ results: PartialSourceManga[]; hasNext: boolean }> {
     const parts = [`page=${page}`, `size=${PAGE_SIZE}`];
 
-    if (sort && sort !== "relevance") {
+    if (sort) {
       parts.push(`sort=${sort}`);
     }
 
-    const showSource = await getShowSource();
-
-    // The source list is only there to print a name beside the title, so it is
-    // not fetched at all unless that setting is on.
-    const [data, sources] = await Promise.all([
-      this.api.fetchJSON<SearchDto>(`${API_URL}/search/series?${parts.join("&")}`, {
+    const [domain, data, titles] = await Promise.all([
+      this.api.domain(),
+      this.api.fetchJSON<SearchDto>(`/search/series?${parts.join("&")}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       }),
-      showSource
-        ? this.api
-            .getTaxonomy()
-            .then((taxonomy) => taxonomy.sources)
-            .catch(() => [] as SourceDto[])
-        : Promise.resolve([] as SourceDto[]),
+      this.sourceTitles(),
     ]);
 
-    const titles = new Map(sources.map((source) => [source.source_id, source.title]));
-    const results = (data.content ?? []).map((book) => {
-      const source = book.source_id ? titles.get(book.source_id) : undefined;
-      const subtitle = [
-        typeof book.current_books === "number" ? `${book.current_books} Chapters` : "",
-        book.start_year ? String(book.start_year) : "",
-      ]
-        .filter(Boolean)
-        .join(" • ");
-
-      return App.createPartialSourceManga({
-        mangaId: book.series_id,
-        title: showSource && source ? `${book.title.trim()} [${source}]` : book.title.trim(),
-        image: this.cover(book.cover_image_id),
-        ...(subtitle ? { subtitle } : {}),
-      });
-    });
+    const results = (data.content ?? []).map((book) => this.card(domain, book, titles));
 
     return { results, hasNext: data.last === false && results.length > 0 };
   }
 
-  // Every row is a different sort of the same endpoint, so they are fetched
-  // together rather than one after another.
-  async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
-    for (const [index, entry] of HOME_SECTIONS.entries()) {
-      sectionCallback(
-        App.createHomeSection({
-          id: entry.id,
-          title: entry.title,
-          type: index === 0 ? HomeSectionType.singleRowLarge : HomeSectionType.singleRowNormal,
-          containsMoreItems: true,
+  private async trending(): Promise<PartialSourceManga[]> {
+    const [domain, ratings, languages] = await Promise.all([
+      this.api.domain(),
+      getContentRatings(),
+      getContentLanguages(),
+    ]);
+    const query = [
+      "limit=36",
+      `age_rating=${ratings.join(",")}`,
+      ...(languages.length > 0 ? [`lang=${languages.join(",")}`] : []),
+    ];
+    const data = await this.api.fetchJSON<TrendingDto>(`/series/trending?${query.join("&")}`);
+
+    return (data.items ?? []).flatMap((item) => {
+      const series = item.series;
+
+      if (!series?.series_id) {
+        return [];
+      }
+
+      return [
+        App.createPartialSourceManga({
+          mangaId: series.series_id,
+          title: series.title.trim(),
+          image: this.cover(domain, series.cover_image_id),
+          ...(typeof series.current_books === "number"
+            ? { subtitle: `${series.current_books} Chapters` }
+            : {}),
         }),
-      );
+      ];
+    });
+  }
+
+  private section(index: number, items?: PartialSourceManga[]): HomeSection {
+    const entry = HOME_SECTIONS[index]!;
+
+    return App.createHomeSection({
+      id: entry.id,
+      title: entry.title,
+      type: index === 0 ? HomeSectionType.singleRowLarge : HomeSectionType.singleRowNormal,
+      containsMoreItems: entry.sort !== "",
+      ...(items ? { items } : {}),
+    });
+  }
+
+  // Every row is fetched together rather than one after another; a row that
+  // fails stays empty so the others still paint.
+  async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
+    for (const index of HOME_SECTIONS.keys()) {
+      sectionCallback(this.section(index));
     }
 
     const body = await this.searchBody();
     const rows = await Promise.all(
       HOME_SECTIONS.map((entry) =>
-        this.series(body, 0, entry.sort).catch(() => ({ results: [], hasNext: false })),
+        (entry.sort === ""
+          ? this.trending()
+          : this.series(body, 0, entry.sort).then((row) => row.results)
+        ).catch(() => [] as PartialSourceManga[]),
       ),
     );
 
-    for (const [index, entry] of HOME_SECTIONS.entries()) {
-      sectionCallback(
-        App.createHomeSection({
-          id: entry.id,
-          title: entry.title,
-          type: index === 0 ? HomeSectionType.singleRowLarge : HomeSectionType.singleRowNormal,
-          containsMoreItems: true,
-          items: rows[index]?.results ?? [],
-        }),
-      );
+    for (const index of HOME_SECTIONS.keys()) {
+      sectionCallback(this.section(index, rows[index] ?? []));
     }
 
     // Rows are already painted; pull the tag list in behind them so the filter
@@ -394,7 +497,7 @@ export class Kagane
   async getViewMoreItems(homepageSectionId: string, metadata: unknown): Promise<PagedResults> {
     const entry = HOME_SECTIONS.find((row) => row.id === homepageSectionId);
 
-    if (!entry) {
+    if (!entry || entry.sort === "") {
       return App.createPagedResults({ results: [] });
     }
 
@@ -409,7 +512,12 @@ export class Kagane
 
   async getSearchResults(query: SearchRequest, metadata: unknown): Promise<PagedResults> {
     const page = (metadata as { page?: number } | undefined)?.page ?? 0;
-    const { results, hasNext } = await this.series(await this.searchBody(query), page);
+    const sort = this.split(query.includedTags, "sort")[0];
+    const { results, hasNext } = await this.series(
+      await this.searchBody(query),
+      page,
+      sort ? `${sort},desc` : undefined,
+    );
 
     return App.createPagedResults({
       results,
@@ -418,28 +526,25 @@ export class Kagane
   }
 
   async getMangaDetails(mangaId: string): Promise<SourceManga> {
-    const [data, taxonomy] = await Promise.all([
-      this.api.fetchJSON<DetailsDto>(`${API_URL}/series/${mangaId}`),
+    const [domain, data, taxonomy] = await Promise.all([
+      this.api.domain(),
+      this.api.fetchJSON<DetailsDto>(`/series/${mangaId}`),
       this.api.getTaxonomy().catch(() => ({ genres: [], sources: [] as SourceDto[] })),
     ]);
 
     const genres = (data.genres ?? []).map((genre) =>
-      App.createTag({
-        id: genre.genre_name.toLowerCase().replace(/\s+/g, "-"),
-        label: genre.genre_name,
-      }),
+      App.createTag({ id: `genre:${genre.genre_id}`, label: genre.genre_name }),
     );
     const tags = (data.tags ?? [])
       .slice(0, 60)
-      .map((tag) =>
-        App.createTag({ id: tag.tag_name.toLowerCase().replace(/\s+/g, "-"), label: tag.tag_name }),
-      );
+      .map((tag) => App.createTag({ id: `tag:${tag.tag_id}`, label: tag.tag_name }));
 
-    const author = (data.series_staff ?? []).find((entry) =>
-      /story|author|writer/i.test(entry.role),
-    );
-    const artist = (data.series_staff ?? []).find((entry) => /art|illustrat/i.test(entry.role));
+    const staff = data.series_staff ?? [];
+    const author = staff.find((entry) => /author|story|writer|original creator/i.test(entry.role));
+    const artist = staff.find((entry) => /art|illustrat/i.test(entry.role));
     const source = taxonomy.sources.find((entry) => entry.source_id === data.source_id);
+    const covers = data.series_covers ?? [];
+    const cover = covers.find((entry) => entry.is_main) ?? covers[0];
 
     return App.createSourceManga({
       id: mangaId,
@@ -448,12 +553,13 @@ export class Kagane
           data.title,
           ...(data.series_alternate_titles ?? []).map((alt) => alt.title).filter(Boolean),
         ],
-        image: this.cover(data.series_covers?.[0]?.image_id),
+        image: this.cover(domain, cover?.image_id),
         desc: (data.description ?? "").trim(),
-        status: /completed|finished/i.test(data.upload_status ?? "") ? "Completed" : "Ongoing",
+        status: this.status(data),
+        hentai: data.is_pornographic === true,
         ...(author?.name ? { author: author.name } : {}),
         ...(artist?.name ? { artist: artist.name } : {}),
-        ...(source ? { hentai: false } : {}),
+        ...(source ? { additionalInfo: { source: source.title } } : {}),
         ...(genres.length > 0 || tags.length > 0
           ? {
               tags: [
@@ -470,52 +576,93 @@ export class Kagane
     });
   }
 
+  private status(data: DetailsDto): string {
+    const value = `${data.upload_status ?? ""} ${data.publication_status ?? ""}`;
+
+    if (/completed/i.test(value)) {
+      return "Completed";
+    }
+
+    if (/abandoned/i.test(value)) {
+      return "Dropped";
+    }
+
+    if (/hiatus/i.test(value)) {
+      return "Hiatus";
+    }
+
+    return "Ongoing";
+  }
+
+  // The index lists every chapter in one payload as rows under a column list,
+  // which is how the site itself fills the chapter list.
   async getChapters(mangaId: string): Promise<Chapter[]> {
-    const [data, taxonomy] = await Promise.all([
-      this.api.fetchJSON<DetailsDto>(`${API_URL}/series/${mangaId}`),
-      this.api.getTaxonomy().catch(() => ({ genres: [], sources: [] as SourceDto[] })),
-    ]);
+    const data = await this.api.fetchJSON<BookIndexDto>(
+      `/series/${mangaId}/books/index?fields=List`,
+    );
 
-    const source = taxonomy.sources.find((entry) => entry.source_id === data.source_id);
-    // A star marks an official upload so they stand out from scanlations.
-    const official = source?.source_type === "Official";
-    const books = data.series_books ?? [];
+    const columns = new Map(data.fields.map((name, index) => [name, index]));
+    const column = (row: unknown[], name: string): unknown => {
+      const index = columns.get(name);
 
-    if (books.length === 0) {
+      return index === undefined ? undefined : row[index];
+    };
+    const rows = data.books ?? [];
+
+    if (rows.length === 0 || !columns.has("book_id")) {
       throw new Error(`No chapters were listed for ${mangaId}.`);
     }
 
-    // The API returns books oldest-first and `sort_no` tracks the chapter number
-    // (decimals included), so ordering by it puts the newest chapter last —
-    // which is where the app expects the highest sortingIndex to be.
-    const ordered = [...books].sort((left, right) => left.sort_no - right.sort_no);
+    const groups = data.groups ?? [];
+    const books = rows
+      .map((row) => ({
+        id: String(column(row, "book_id") ?? ""),
+        sortNo: Number(column(row, "sort_no")),
+        chapterNo: numberOrNaN(column(row, "chapter_no")),
+        volumeNo: numberOrNaN(column(row, "volume_no")),
+        title: String(column(row, "title") ?? "").trim(),
+        releasedAt: Number(column(row, "released_at")),
+        groupNames: (Array.isArray(column(row, "group_ix"))
+          ? (column(row, "group_ix") as number[])
+          : []
+        )
+          .map((index) => groups[index]?.title ?? "")
+          .filter(Boolean),
+      }))
+      .filter((book) => book.id)
+      .sort((left, right) => left.sortNo - right.sortNo);
 
-    return ordered.map((book, index) => {
-      const groupName = book.groups?.map((group) => group.title).join(", ") || source?.title || "";
-      const time = book.created_at ? new Date(book.created_at) : undefined;
-      const chapterNumber = Number(book.chapter_no);
-      const volume = Number(book.volume_no);
+    return books.map((book, index) => {
+      const groupName = book.groupNames.join(", ");
+      const chapNum = Number.isFinite(book.chapterNo) ? book.chapterNo : book.sortNo;
+      // Titles like "Ch. 12" or "Chapter 12" only repeat the number.
+      const name = /^(ch\.?|chapter)\s*[\d.]+$/i.test(book.title) ? "" : book.title;
 
       return App.createChapter({
-        id: book.book_id,
-        chapNum: Number.isFinite(chapterNumber) ? chapterNumber : book.sort_no,
+        id: book.id,
+        chapNum,
         sortingIndex: index,
         langCode: "en",
-        ...(book.title ? { name: book.title } : {}),
-        ...(Number.isFinite(volume) ? { volume } : {}),
-        ...(groupName ? { group: official ? `${groupName} ⭐` : groupName } : {}),
-        ...(time && !isNaN(time.getTime()) ? { time } : {}),
+        ...(name ? { name } : {}),
+        ...(Number.isFinite(book.volumeNo) ? { volume: book.volumeNo } : {}),
+        ...(groupName ? { group: groupName } : {}),
+        ...(Number.isFinite(book.releasedAt) && book.releasedAt > 0
+          ? { time: new Date(book.releasedAt * 1000) }
+          : {}),
       });
     });
   }
 
+  // Pages come from the CDN the challenge names, as JPEG on the plain "page"
+  // route; "page/original" would be JPEG XL, which the app cannot decode.
   async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
     const challenge = await this.api.challenge(chapterId);
+    const base = challenge.cache_url.replace(/\/+$/, "");
     const pages = [...(challenge.manifest?.pages ?? [])]
       .sort((left, right) => left.page_no - right.page_no)
       .map(
         (page) =>
-          `${challenge.cache_url}/api/v2/books/page/${chapterId}/${page.page_id}.${page.ext ?? "jxl"}?token=${challenge.access_token}&is_datasaver=false`,
+          `${base}/api/v2/books/page/${chapterId}/${page.page_id}.${page.ext ?? "jxl"}?token=${encodeURIComponent(challenge.access_token)}`,
       );
 
     if (pages.length === 0) {
