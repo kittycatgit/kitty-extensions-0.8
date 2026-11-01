@@ -730,13 +730,18 @@ var _Sources = (() => {
   var import_types = __toESM(require_lib());
 
   // src/Kagane/models.ts
-  var BASE_URL = "https://kagane.to";
-  var API_URL = `${BASE_URL}/api/v2`;
+  var MIRRORS_URL = "https://kagane.org/";
+  var DEFAULT_DOMAIN = "https://kagane.moe";
+  var DOMAIN_TTL_MS = 24 * 60 * 60 * 1e3;
   var PAGE_SIZE = 35;
-  var MISSING_COVER = `${BASE_URL}/image/none.webp`;
-  var INTEGRITY_TOKEN_KEY = "kagane-integrity-token";
-  var INTEGRITY_EXP_KEY = "kagane-integrity-exp";
+  var DOMAIN_KEY = "kagane-domain";
+  var DOMAIN_AT_KEY = "kagane-domain-at";
+  var DOMAIN_OVERRIDE_KEY = "kagane-domain-override";
+  var CHALLENGE_HOST_KEY = "kagane-challenge-host";
+  var INTEGRITY_KEY = "kagane-integrity";
   var CONTENT_RATINGS_KEY = "kagane-content-ratings";
+  var SHOW_PORNOGRAPHIC_KEY = "kagane-show-pornographic";
+  var SHOW_DISTURBING_KEY = "kagane-show-disturbing";
   var SOURCE_DISPLAY_MODE_KEY = "kagane-source-display-mode";
   var EXCLUDED_GENRES_KEY = "kagane-excluded-genres";
   var CONTENT_LANGUAGES_KEY = "kagane-content-languages";
@@ -746,8 +751,18 @@ var _Sources = (() => {
   var CUSTOM_HIDDEN_TAGS_KEY = "kagane-custom-hidden-tags";
   var TAGS_CACHE_KEY = "kagane-tags-cache";
   var TAGS_CACHE_DATE_KEY = "kagane-tags-cache-date";
-  var CONTENT_RATINGS = ["Safe", "Suggestive", "Erotica", "Pornographic"];
-  var DEFAULT_RATINGS = ["Safe", "Suggestive"];
+  var AGE_RATINGS = [
+    { id: "Safe", title: "Safe" },
+    { id: "FifteenPlus", title: "15+" },
+    { id: "EighteenPlus", title: "18+" }
+  ];
+  var DEFAULT_RATINGS = ["Safe", "FifteenPlus"];
+  var LEGACY_RATINGS = {
+    safe: "Safe",
+    suggestive: "FifteenPlus",
+    erotica: "EighteenPlus",
+    pornographic: "EighteenPlus"
+  };
   var SOURCE_DISPLAY_MODES = [
     { id: "all", title: "Show All", types: ["Official", "Unofficial", "Mixed"] },
     { id: "official", title: "Official Sources Only", types: ["Official"] },
@@ -781,11 +796,22 @@ var _Sources = (() => {
     { id: "Abandoned", title: "Cancelled" },
     { id: "Hiatus", title: "Hiatus" }
   ];
+  var SORT_FIELDS = [
+    { id: "avg_views_today", title: "Popular Today" },
+    { id: "avg_views_week", title: "Popular This Week" },
+    { id: "avg_views_month", title: "Popular This Month" },
+    { id: "avg_views", title: "Popular All Time" },
+    { id: "updated_at", title: "Recently Updated" },
+    { id: "created_at", title: "Recently Added" },
+    { id: "rating", title: "Top Rated" },
+    { id: "current_books", title: "Most Chapters" }
+  ];
   var HOME_SECTIONS = [
+    { id: "trending", title: "Trending This Week", sort: "" },
     { id: "popular_today", title: "Popular Today", sort: "avg_views_today,desc" },
     { id: "popular_week", title: "Popular This Week", sort: "avg_views_week,desc" },
-    { id: "latest", title: "Latest Updates", sort: "updated_at,desc" },
-    { id: "new_series", title: "New Series", sort: "created_at,desc" }
+    { id: "updated", title: "Recently Updated", sort: "updated_at,desc" },
+    { id: "added", title: "Recently Added", sort: "created_at,desc" }
   ];
 
   // src/Kagane/tags.ts
@@ -1191,15 +1217,60 @@ var _Sources = (() => {
     }
     return typeof value === "string" && value ? [value] : fallback;
   }
+  async function readBoolean(key, fallback) {
+    const value = await stateManager().retrieve(key);
+    return typeof value === "boolean" ? value : fallback;
+  }
+  function normalizeDomain(value) {
+    const trimmed = String(value ?? "").trim();
+    if (!trimmed) {
+      return "";
+    }
+    const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    return withScheme.replace(/\/+$/, "");
+  }
+  async function getDomainOverride() {
+    return normalizeDomain(await stateManager().retrieve(DOMAIN_OVERRIDE_KEY));
+  }
+  async function setDomainOverride(value) {
+    await stateManager().store(DOMAIN_OVERRIDE_KEY, normalizeDomain(value));
+  }
+  async function getCachedDomain() {
+    const domain = normalizeDomain(await stateManager().retrieve(DOMAIN_KEY));
+    const at = Number(await stateManager().retrieve(DOMAIN_AT_KEY) ?? 0);
+    return domain && at > 0 ? { domain, at } : void 0;
+  }
+  async function setCachedDomain(domain) {
+    await stateManager().store(DOMAIN_KEY, normalizeDomain(domain));
+    await stateManager().store(DOMAIN_AT_KEY, Date.now());
+  }
+  async function clearCachedDomain() {
+    await stateManager().store(DOMAIN_KEY, "");
+    await stateManager().store(DOMAIN_AT_KEY, 0);
+  }
+  async function getChallengeHost() {
+    return normalizeDomain(await stateManager().retrieve(CHALLENGE_HOST_KEY));
+  }
+  async function setChallengeHost(origin) {
+    await stateManager().store(CHALLENGE_HOST_KEY, normalizeDomain(origin));
+  }
   async function getContentRatings() {
     const value = await stateManager().retrieve(CONTENT_RATINGS_KEY);
-    if (typeof value === "string" && value) {
-      const ladder = CONTENT_RATINGS.map((rating) => rating.toLowerCase());
-      const index = ladder.indexOf(value.toLowerCase());
-      return index < 0 ? DEFAULT_RATINGS : CONTENT_RATINGS.slice(0, index + 1);
+    const stored = Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : typeof value === "string" && value ? [value] : [];
+    const valid = new Set(AGE_RATINGS.map((rating) => rating.id));
+    const mapped = stored.map((entry) => LEGACY_RATINGS[entry.toLowerCase()] ?? entry);
+    const list = [...new Set(mapped.filter((entry) => valid.has(entry)))];
+    if (typeof value === "string" && list.length === 1) {
+      const index = AGE_RATINGS.findIndex((rating) => rating.id === list[0]);
+      return AGE_RATINGS.slice(0, index + 1).map((rating) => rating.id);
     }
-    const list = await readArray(CONTENT_RATINGS_KEY, DEFAULT_RATINGS);
     return list.length > 0 ? list : DEFAULT_RATINGS;
+  }
+  async function getShowPornographic() {
+    return readBoolean(SHOW_PORNOGRAPHIC_KEY, false);
+  }
+  async function getShowDisturbing() {
+    return readBoolean(SHOW_DISTURBING_KEY, false);
   }
   async function getSourceDisplayMode() {
     const value = await stateManager().retrieve(SOURCE_DISPLAY_MODE_KEY);
@@ -1226,20 +1297,144 @@ var _Sources = (() => {
     return readArray(CUSTOM_HIDDEN_TAGS_KEY);
   }
   async function getShowSource() {
-    return await stateManager().retrieve(SHOW_SOURCE_KEY) ?? false;
+    return readBoolean(SHOW_SOURCE_KEY, false);
   }
   async function getTagMatchAll() {
-    return await stateManager().retrieve(TAG_MATCH_ALL_KEY) ?? false;
+    return readBoolean(TAG_MATCH_ALL_KEY, false);
   }
 
   // src/Kagane/api.ts
   var TAXONOMY_TTL_MS = 24 * 60 * 60 * 1e3;
+  var DomainError = class extends Error {
+  };
+  function isCloudflareChallenge(response) {
+    if (response.status !== 403 && response.status !== 503) {
+      return false;
+    }
+    const headers = response.headers ?? {};
+    const mitigated = String(headers["cf-mitigated"] ?? headers["Cf-Mitigated"] ?? "");
+    return mitigated.toLowerCase() === "challenge" || /just a moment|cf-chl|challenge-platform/i.test(response.data ?? "");
+  }
+  function originOf(url) {
+    const match = /^(https?:\/\/[^/?#]+)/i.exec(url);
+    return match?.[1] ?? "";
+  }
+  function mirrorsFrom(html) {
+    const found = [];
+    const pattern = /<a\b[^>]*\bhref="(https:\/\/kagane\.[a-z]+)\/?"/gi;
+    let match;
+    while ((match = pattern.exec(html)) !== null) {
+      const host = (match[1] ?? "").toLowerCase();
+      if (host && host !== MIRRORS_URL.replace(/\/$/, "") && !found.includes(host)) {
+        found.push(host);
+      }
+    }
+    return found;
+  }
   var KaganeApi = class {
     constructor(requestManager) {
       this.requestManager = requestManager;
     }
-    async fetchJSON(url, init) {
+    // What the interceptor can use without awaiting anything.
+    get knownDomain() {
+      return this.domainInMemory?.domain ?? "";
+    }
+    async domain() {
+      const override = await getDomainOverride();
+      if (override) {
+        return override;
+      }
+      if (this.domainInMemory && Date.now() - this.domainInMemory.at < DOMAIN_TTL_MS) {
+        return this.domainInMemory.domain;
+      }
+      const cached = await getCachedDomain();
+      if (cached && Date.now() - cached.at < DOMAIN_TTL_MS) {
+        this.domainInMemory = cached;
+        return cached.domain;
+      }
+      return this.resolveDomain();
+    }
+    async resolveDomain() {
+      this.pendingDomain ??= this.loadDomain().finally(() => {
+        this.pendingDomain = void 0;
+      });
+      return this.pendingDomain;
+    }
+    async loadDomain() {
       const response = await this.requestManager.schedule(
+        App.createRequest({ url: MIRRORS_URL, method: "GET" }),
+        1
+      );
+      if (isCloudflareChallenge(response)) {
+        await setChallengeHost(MIRRORS_URL);
+        throw new DomainError(`Cloudflare is challenging ${MIRRORS_URL}; complete it and retry.`);
+      }
+      if (response.status !== 200) {
+        throw new DomainError(`The mirrors page ${MIRRORS_URL} answered ${response.status}.`);
+      }
+      const mirrors = mirrorsFrom(response.data ?? "");
+      const domain = mirrors[0];
+      if (!domain) {
+        throw new DomainError(`No mirror is listed on ${MIRRORS_URL}.`);
+      }
+      this.domainInMemory = { domain, at: Date.now() };
+      await setCachedDomain(domain);
+      return domain;
+    }
+    async forgetDomain() {
+      this.domainInMemory = void 0;
+      this.integrity = void 0;
+      await clearCachedDomain();
+    }
+    // The domain settings row needs something to print before anything ran.
+    async displayDomain() {
+      const override = await getDomainOverride();
+      return override || this.knownDomain || (await getCachedDomain())?.domain || DEFAULT_DOMAIN;
+    }
+    async apiUrl(path) {
+      return `${await this.domain()}/api/v2${path}`;
+    }
+    async fetchJSON(path, init) {
+      const url = init?.absolute ? path : await this.apiUrl(path);
+      const response = await this.send(url, init);
+      const raw = typeof response.data === "string" ? response.data : String(response.data ?? "");
+      if (response.status !== 200) {
+        throw new Error(`Kagane answered ${response.status} for ${url}: ${raw.slice(0, 120)}`);
+      }
+      return JSON.parse(raw);
+    }
+    // A mirror that stops answering is the signal the site moved again: resolve
+    // once more and repeat the call on the new domain, otherwise give up.
+    async send(url, init) {
+      const origin = originOf(url);
+      const onMirror = origin !== "" && origin === this.knownDomain && !await getDomainOverride();
+      let response;
+      try {
+        response = await this.schedule(url, init);
+      } catch (error) {
+        if (!onMirror) {
+          throw error;
+        }
+        const next = await this.renewDomain(origin);
+        if (!next) {
+          throw error;
+        }
+        return this.schedule(url.replace(origin, next), init);
+      }
+      if (isCloudflareChallenge(response)) {
+        await setChallengeHost(origin);
+        return response;
+      }
+      if (onMirror && response.status >= 500) {
+        const next = await this.renewDomain(origin);
+        if (next) {
+          return this.schedule(url.replace(origin, next), init);
+        }
+      }
+      return response;
+    }
+    schedule(url, init) {
+      return this.requestManager.schedule(
         App.createRequest({
           url,
           method: init?.method ?? "GET",
@@ -1248,39 +1443,39 @@ var _Sources = (() => {
         }),
         1
       );
-      const raw = typeof response.data === "string" ? response.data : String(response.data ?? "");
-      if (response.status !== 200) {
-        throw new Error(`Kagane answered ${response.status} for ${url}: ${raw.slice(0, 120)}`);
-      }
-      return JSON.parse(raw);
     }
-    // The site mints these itself with no payload; each one lasts about five
-    // minutes, so it is refreshed rather than stored for long.
+    async renewDomain(failed) {
+      await this.forgetDomain();
+      const next = await this.resolveDomain();
+      return next !== failed ? next : void 0;
+    }
+    // The site mints these itself with no payload; each lasts about five minutes
+    // and names the domain it was minted on, so a domain change discards it.
     async integrityToken(force = false) {
-      if (!force && this.integrity && this.integrity.exp > Date.now() + 15e3) {
+      const domain = await this.domain();
+      const fresh = (entry) => !!entry && entry.domain === domain && entry.exp > Date.now() + 15e3;
+      if (!force && fresh(this.integrity)) {
         return this.integrity.token;
       }
       if (!force) {
-        const stored = await stateManager().retrieve(INTEGRITY_TOKEN_KEY);
-        const exp = Number(await stateManager().retrieve(INTEGRITY_EXP_KEY) ?? 0);
-        if (stored && exp > Date.now() + 15e3) {
-          this.integrity = { token: stored, exp };
-          return stored;
+        const stored = await stateManager().retrieve(INTEGRITY_KEY);
+        if (stored && typeof stored === "object" && fresh(stored)) {
+          this.integrity = stored;
+          return stored.token;
         }
       }
-      const issued = await this.fetchJSON(`${BASE_URL}/api/integrity`, {
+      const issued = await this.fetchJSON(`${domain}/api/integrity`, {
+        absolute: true,
         method: "POST",
         headers: { "content-type": "application/json" },
         body: "{}"
       });
-      this.integrity = { token: issued.token, exp: issued.exp * 1e3 };
-      await stateManager().store(INTEGRITY_TOKEN_KEY, issued.token);
-      await stateManager().store(INTEGRITY_EXP_KEY, issued.exp * 1e3);
+      this.integrity = { domain, token: issued.token, exp: issued.exp * 1e3 };
+      await stateManager().store(INTEGRITY_KEY, this.integrity);
       return issued.token;
     }
     async challenge(bookId) {
-      const url = `${API_URL}/books/${bookId}?is_datasaver=false`;
-      const request = async (token) => this.fetchJSON(url, {
+      const request = async (token) => this.fetchJSON(`/books/${bookId}?intent=Read`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-integrity-token": token },
         body: "{}"
@@ -1302,8 +1497,8 @@ var _Sources = (() => {
     }
     async loadTaxonomy() {
       const [genres, sources] = await Promise.all([
-        this.fetchJSON(`${API_URL}/genres/list`),
-        this.fetchJSON(`${API_URL}/sources/list`, {
+        this.fetchJSON("/genres/list"),
+        this.fetchJSON("/sources/list", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ source_types: null })
@@ -1328,9 +1523,7 @@ var _Sources = (() => {
         this.tags = { at: Date.now(), value: cached };
         return cached;
       }
-      const tags = (await this.fetchJSON(`${API_URL}/tags/list`)).filter(
-        (tag) => tag.id && tag.tag_name
-      );
+      const tags = (await this.fetchJSON("/tags/list")).filter((tag) => tag.id && tag.tag_name && (tag.status ?? "Active") === "Active").map((tag) => ({ id: tag.id, tag_name: tag.tag_name.trim() }));
       this.tags = { at: Date.now(), value: tags };
       try {
         await stateManager().store(TAGS_CACHE_KEY, JSON.stringify(tags));
@@ -1403,12 +1596,13 @@ var _Sources = (() => {
           label: "Kagane Settings",
           form: App.createDUIForm({
             sections: async () => {
-              const ratingLabels = Object.fromEntries(CONTENT_RATINGS.map((r) => [r, r]));
+              const ratingLabels = Object.fromEntries(AGE_RATINGS.map((r) => [r.id, r.title]));
               const languageLabels = Object.fromEntries(LANGUAGES.map((l) => [l.id, l.title]));
               const modeLabels = Object.fromEntries(SOURCE_DISPLAY_MODES.map((m) => [m.id, m.title]));
               const categoryLabels = Object.fromEntries(
                 HIDDEN_TAG_CATEGORIES.map((c) => [c.id, c.title])
               );
+              const currentDomain = await api.displayDomain();
               let genreIds = [];
               let genreLabels = {};
               try {
@@ -1422,20 +1616,64 @@ var _Sources = (() => {
               }
               return [
                 App.createDUISection({
+                  id: "domain",
+                  header: "Domain",
+                  footer: `Kagane moves between domains. The live one is read from ${MIRRORS_URL} and kept for a day; set an override to use a domain as typed instead.`,
+                  isHidden: false,
+                  rows: async () => [
+                    App.createDUILabel({
+                      id: "current-domain",
+                      label: "Current Domain",
+                      value: currentDomain
+                    }),
+                    App.createDUIInputField({
+                      id: "domain-override",
+                      label: "Override",
+                      value: App.createDUIBinding({
+                        get: getDomainOverride,
+                        set: async (value) => {
+                          await setDomainOverride(value);
+                          await api.forgetDomain();
+                        }
+                      })
+                    }),
+                    App.createDUIButton({
+                      id: "recheck-mirrors",
+                      label: "Re-check Mirrors",
+                      onTap: async () => {
+                        await api.forgetDomain();
+                        await api.resolveDomain();
+                      }
+                    })
+                  ]
+                }),
+                App.createDUISection({
                   id: "content",
                   header: "Content",
-                  footer: "Titles outside the selected ratings and languages are hidden everywhere.",
+                  footer: "Titles outside the selected ratings and languages are hidden everywhere. Explicit and disturbing titles only show with 18+ selected.",
                   isHidden: false,
                   rows: async () => [
                     select({
                       id: "content-ratings",
-                      label: "Content Ratings",
-                      options: [...CONTENT_RATINGS],
+                      label: "Age Ratings",
+                      options: AGE_RATINGS.map((rating) => rating.id),
                       labels: ratingLabels,
                       read: getContentRatings,
                       key: CONTENT_RATINGS_KEY,
                       multi: true
                     }),
+                    switchRow(
+                      "show-pornographic",
+                      "Show Explicit Titles",
+                      SHOW_PORNOGRAPHIC_KEY,
+                      getShowPornographic
+                    ),
+                    switchRow(
+                      "show-disturbing",
+                      "Show Disturbing Titles",
+                      SHOW_DISTURBING_KEY,
+                      getShowDisturbing
+                    ),
                     select({
                       id: "content-languages",
                       label: "Languages",
@@ -1529,15 +1767,18 @@ var _Sources = (() => {
   }
 
   // src/Kagane/Kagane.ts
+  function numberOrNaN(value) {
+    return value === null || value === void 0 || value === "" ? NaN : Number(value);
+  }
   var KaganeInfo = {
-    version: "5.0.0",
+    version: "6.0.0",
     name: "Kagane",
     icon: "icon.png",
     author: "kittycatgit",
     authorWebsite: "https://github.com/kittycatgit",
-    description: "Extension that pulls content from kagane.to.",
+    description: "Extension that pulls content from Kagane, on whichever domain kagane.org lists.",
     contentRating: import_types.ContentRating.MATURE,
-    websiteBaseURL: BASE_URL,
+    websiteBaseURL: MIRRORS_URL,
     language: "en",
     intents: import_types.SourceIntents.MANGA_CHAPTERS | import_types.SourceIntents.HOMEPAGE_SECTIONS | import_types.SourceIntents.SETTINGS_UI | import_types.SourceIntents.CLOUDFLARE_BYPASS_REQUIRED
   };
@@ -1547,23 +1788,36 @@ var _Sources = (() => {
       this.requestManager = App.createRequestManager({
         requestTimeout: 2e4,
         interceptor: {
+          // The page CDN only serves with the site's Origin; the mirrors page and
+          // the API accept their own. Resolving here would recurse, so the domain
+          // already in memory is used and the request's own host otherwise.
           interceptRequest: async (request) => {
+            const requestOrigin = originOf(request.url);
+            const origin = requestOrigin === MIRRORS_URL.replace(/\/$/, "") ? requestOrigin : this.api.knownDomain || requestOrigin;
             request.headers = {
               ...request.headers,
-              origin: BASE_URL,
-              referer: `${BASE_URL}/`,
+              origin,
+              referer: `${origin}/`,
               "user-agent": await this.requestManager.getDefaultUserAgent()
             };
             return request;
           },
-          interceptResponse: async (response) => response
+          interceptResponse: async (response) => {
+            if (isCloudflareChallenge(response)) {
+              await setChallengeHost(originOf(response.request.url));
+            }
+            return response;
+          }
         }
       });
       this.api = new KaganeApi(this.requestManager);
     }
+    // Whichever host challenged last is the one the bypass must clear.
     async getCloudflareBypassRequestAsync() {
+      const challenged = await getChallengeHost();
+      const url = challenged || this.api.knownDomain || DEFAULT_DOMAIN;
       return App.createRequest({
-        url: BASE_URL,
+        url,
         method: "GET",
         headers: { "user-agent": await this.requestManager.getDefaultUserAgent() }
       });
@@ -1571,14 +1825,16 @@ var _Sources = (() => {
     async getSourceMenu() {
       return buildSettings(this.api);
     }
+    // Share links are built before any request runs, so this uses what is known
+    // and the mirrors page when nothing is.
     getMangaShareUrl(mangaId) {
-      return `${BASE_URL}/series/${mangaId}`;
+      const domain = this.api.knownDomain;
+      return domain ? `${domain}/series/${mangaId}` : MIRRORS_URL;
     }
-    // Some series carry no cover at all on Kagane. The fallback has to be a URL
-    // the app can try and fail on: an empty string blanks the whole row, and the
-    // favicon loads and gets stretched into a blurred logo.
-    cover(imageId) {
-      return imageId ? `${API_URL}/image/${imageId}/compressed` : MISSING_COVER;
+    // Some series carry no cover at all. The fallback has to be a URL the app can
+    // try and fail on: an empty string blanks the whole row.
+    cover(domain, imageId) {
+      return imageId ? `${domain}/api/v2/image/${imageId}/compressed` : `${domain}/image/none.webp`;
     }
     // Tag ids carry the group they came from so the search body can put each one
     // in the right field; ids never contain spaces, which Paperback rejects.
@@ -1592,6 +1848,13 @@ var _Sources = (() => {
       const popular = tags.filter((tag) => wanted.has(tag.tag_name.toLowerCase())).sort((left, right) => left.tag_name.localeCompare(right.tag_name));
       const visibleSources = sources.filter((source) => this.matchesMode(source, mode)).sort((left, right) => left.title.localeCompare(right.title));
       const sections = [
+        App.createTagSection({
+          id: "sort",
+          label: "Sort",
+          tags: SORT_FIELDS.map(
+            (sort) => App.createTag({ id: `sort:${sort.id}`, label: sort.title })
+          )
+        }),
         App.createTagSection({
           id: "genres",
           label: "Genres",
@@ -1636,8 +1899,8 @@ var _Sources = (() => {
       }
       return true;
     }
-    // Only a few hundred of the ~8,500 tags fit in a picker, so this reaches the
-    // rest by name. A leading "-" excludes: "romance, -gore".
+    // Only a few hundred of the thousands of tags fit in a picker, so this
+    // reaches the rest by name. A leading "-" excludes: "romance, -gore".
     async getSearchFields() {
       return [
         App.createSearchField({
@@ -1653,9 +1916,23 @@ var _Sources = (() => {
     split(tags, prefix) {
       return (tags ?? []).map((tag) => tag.id ?? "").filter((id) => id.startsWith(`${prefix}:`)).map((id) => id.slice(prefix.length + 1));
     }
+    // The explicit and disturbing flags are what the site sends for a signed-out
+    // reader: absent means "show", false means "hide".
     async searchBody(query) {
-      const [ratings, languages, sourceTypes, excludedGenres, hiddenTagIds, customHidden, matchAll] = await Promise.all([
+      const [
+        ratings,
+        pornographic,
+        disturbing,
+        languages,
+        sourceTypes,
+        excludedGenres,
+        hiddenTagIds,
+        customHidden,
+        matchAll
+      ] = await Promise.all([
         getContentRatings(),
+        getShowPornographic(),
+        getShowDisturbing(),
         getContentLanguages(),
         getSourceTypes(),
         getExcludedGenres(),
@@ -1663,10 +1940,13 @@ var _Sources = (() => {
         getCustomHiddenTags(),
         getTagMatchAll()
       ]);
+      const adult = ratings.includes("EighteenPlus");
       const body = {
+        age_rating: ratings,
         source_type: sourceTypes,
-        content_rating: ratings,
-        content_lang: languages
+        content_lang: languages,
+        ...adult && pornographic ? {} : { is_pornographic: false },
+        ...adult && disturbing ? {} : { is_disturbing: false }
       };
       const title = query?.title?.trim();
       if (title) {
@@ -1720,75 +2000,105 @@ var _Sources = (() => {
     compound(included, excluded, matchAll) {
       return {
         values: included,
-        ...matchAll && included.length > 0 ? { match_all: true } : {},
+        match_all: matchAll && included.length > 0,
         ...excluded.length > 0 ? { exclude: [...new Set(excluded)] } : {}
       };
     }
+    async sourceTitles() {
+      if (!await getShowSource()) {
+        return /* @__PURE__ */ new Map();
+      }
+      const { sources } = await this.api.getTaxonomy();
+      return new Map(sources.map((source) => [source.source_id, source.title]));
+    }
+    card(domain, book, titles) {
+      const source = book.source_id ? titles.get(book.source_id) : void 0;
+      const latest = book.latest_chapters?.[0]?.chapter_no;
+      const subtitle = [
+        latest ? `Ch. ${latest}` : typeof book.current_books === "number" ? `${book.current_books} Chapters` : "",
+        book.start_year ? String(book.start_year) : ""
+      ].filter(Boolean).join(" \u2022 ");
+      return App.createPartialSourceManga({
+        mangaId: book.series_id,
+        title: source ? `${book.title.trim()} [${source}]` : book.title.trim(),
+        image: this.cover(domain, book.cover_image_id),
+        ...subtitle ? { subtitle } : {}
+      });
+    }
     async series(body, page, sort) {
       const parts = [`page=${page}`, `size=${PAGE_SIZE}`];
-      if (sort && sort !== "relevance") {
+      if (sort) {
         parts.push(`sort=${sort}`);
       }
-      const showSource = await getShowSource();
-      const [data, sources] = await Promise.all([
-        this.api.fetchJSON(`${API_URL}/search/series?${parts.join("&")}`, {
+      const [domain, data, titles] = await Promise.all([
+        this.api.domain(),
+        this.api.fetchJSON(`/search/series?${parts.join("&")}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body)
         }),
-        showSource ? this.api.getTaxonomy().then((taxonomy) => taxonomy.sources).catch(() => []) : Promise.resolve([])
+        this.sourceTitles()
       ]);
-      const titles = new Map(sources.map((source) => [source.source_id, source.title]));
-      const results = (data.content ?? []).map((book) => {
-        const source = book.source_id ? titles.get(book.source_id) : void 0;
-        const subtitle = [
-          typeof book.current_books === "number" ? `${book.current_books} Chapters` : "",
-          book.start_year ? String(book.start_year) : ""
-        ].filter(Boolean).join(" \u2022 ");
-        return App.createPartialSourceManga({
-          mangaId: book.series_id,
-          title: showSource && source ? `${book.title.trim()} [${source}]` : book.title.trim(),
-          image: this.cover(book.cover_image_id),
-          ...subtitle ? { subtitle } : {}
-        });
-      });
+      const results = (data.content ?? []).map((book) => this.card(domain, book, titles));
       return { results, hasNext: data.last === false && results.length > 0 };
     }
-    // Every row is a different sort of the same endpoint, so they are fetched
-    // together rather than one after another.
-    async getHomePageSections(sectionCallback) {
-      for (const [index, entry] of HOME_SECTIONS.entries()) {
-        sectionCallback(
-          App.createHomeSection({
-            id: entry.id,
-            title: entry.title,
-            type: index === 0 ? import_types.HomeSectionType.singleRowLarge : import_types.HomeSectionType.singleRowNormal,
-            containsMoreItems: true
+    async trending() {
+      const [domain, ratings, languages] = await Promise.all([
+        this.api.domain(),
+        getContentRatings(),
+        getContentLanguages()
+      ]);
+      const query = [
+        "limit=36",
+        `age_rating=${ratings.join(",")}`,
+        ...languages.length > 0 ? [`lang=${languages.join(",")}`] : []
+      ];
+      const data = await this.api.fetchJSON(`/series/trending?${query.join("&")}`);
+      return (data.items ?? []).flatMap((item) => {
+        const series = item.series;
+        if (!series?.series_id) {
+          return [];
+        }
+        return [
+          App.createPartialSourceManga({
+            mangaId: series.series_id,
+            title: series.title.trim(),
+            image: this.cover(domain, series.cover_image_id),
+            ...typeof series.current_books === "number" ? { subtitle: `${series.current_books} Chapters` } : {}
           })
-        );
+        ];
+      });
+    }
+    section(index, items) {
+      const entry = HOME_SECTIONS[index];
+      return App.createHomeSection({
+        id: entry.id,
+        title: entry.title,
+        type: index === 0 ? import_types.HomeSectionType.singleRowLarge : import_types.HomeSectionType.singleRowNormal,
+        containsMoreItems: entry.sort !== "",
+        ...items ? { items } : {}
+      });
+    }
+    // Every row is fetched together rather than one after another; a row that
+    // fails stays empty so the others still paint.
+    async getHomePageSections(sectionCallback) {
+      for (const index of HOME_SECTIONS.keys()) {
+        sectionCallback(this.section(index));
       }
       const body = await this.searchBody();
       const rows = await Promise.all(
         HOME_SECTIONS.map(
-          (entry) => this.series(body, 0, entry.sort).catch(() => ({ results: [], hasNext: false }))
+          (entry) => (entry.sort === "" ? this.trending() : this.series(body, 0, entry.sort).then((row) => row.results)).catch(() => [])
         )
       );
-      for (const [index, entry] of HOME_SECTIONS.entries()) {
-        sectionCallback(
-          App.createHomeSection({
-            id: entry.id,
-            title: entry.title,
-            type: index === 0 ? import_types.HomeSectionType.singleRowLarge : import_types.HomeSectionType.singleRowNormal,
-            containsMoreItems: true,
-            items: rows[index]?.results ?? []
-          })
-        );
+      for (const index of HOME_SECTIONS.keys()) {
+        sectionCallback(this.section(index, rows[index] ?? []));
       }
       this.api.warm();
     }
     async getViewMoreItems(homepageSectionId, metadata) {
       const entry = HOME_SECTIONS.find((row) => row.id === homepageSectionId);
-      if (!entry) {
+      if (!entry || entry.sort === "") {
         return App.createPagedResults({ results: [] });
       }
       const page = metadata?.page ?? 0;
@@ -1800,31 +2110,33 @@ var _Sources = (() => {
     }
     async getSearchResults(query, metadata) {
       const page = metadata?.page ?? 0;
-      const { results, hasNext } = await this.series(await this.searchBody(query), page);
+      const sort = this.split(query.includedTags, "sort")[0];
+      const { results, hasNext } = await this.series(
+        await this.searchBody(query),
+        page,
+        sort ? `${sort},desc` : void 0
+      );
       return App.createPagedResults({
         results,
         metadata: hasNext ? { page: page + 1 } : void 0
       });
     }
     async getMangaDetails(mangaId) {
-      const [data, taxonomy] = await Promise.all([
-        this.api.fetchJSON(`${API_URL}/series/${mangaId}`),
+      const [domain, data, taxonomy] = await Promise.all([
+        this.api.domain(),
+        this.api.fetchJSON(`/series/${mangaId}`),
         this.api.getTaxonomy().catch(() => ({ genres: [], sources: [] }))
       ]);
       const genres = (data.genres ?? []).map(
-        (genre) => App.createTag({
-          id: genre.genre_name.toLowerCase().replace(/\s+/g, "-"),
-          label: genre.genre_name
-        })
+        (genre) => App.createTag({ id: `genre:${genre.genre_id}`, label: genre.genre_name })
       );
-      const tags = (data.tags ?? []).slice(0, 60).map(
-        (tag) => App.createTag({ id: tag.tag_name.toLowerCase().replace(/\s+/g, "-"), label: tag.tag_name })
-      );
-      const author = (data.series_staff ?? []).find(
-        (entry) => /story|author|writer/i.test(entry.role)
-      );
-      const artist = (data.series_staff ?? []).find((entry) => /art|illustrat/i.test(entry.role));
+      const tags = (data.tags ?? []).slice(0, 60).map((tag) => App.createTag({ id: `tag:${tag.tag_id}`, label: tag.tag_name }));
+      const staff = data.series_staff ?? [];
+      const author = staff.find((entry) => /author|story|writer|original creator/i.test(entry.role));
+      const artist = staff.find((entry) => /art|illustrat/i.test(entry.role));
       const source = taxonomy.sources.find((entry) => entry.source_id === data.source_id);
+      const covers = data.series_covers ?? [];
+      const cover = covers.find((entry) => entry.is_main) ?? covers[0];
       return App.createSourceManga({
         id: mangaId,
         mangaInfo: App.createMangaInfo({
@@ -1832,12 +2144,13 @@ var _Sources = (() => {
             data.title,
             ...(data.series_alternate_titles ?? []).map((alt) => alt.title).filter(Boolean)
           ],
-          image: this.cover(data.series_covers?.[0]?.image_id),
+          image: this.cover(domain, cover?.image_id),
           desc: (data.description ?? "").trim(),
-          status: /completed|finished/i.test(data.upload_status ?? "") ? "Completed" : "Ongoing",
+          status: this.status(data),
+          hentai: data.is_pornographic === true,
           ...author?.name ? { author: author.name } : {},
           ...artist?.name ? { artist: artist.name } : {},
-          ...source ? { hentai: false } : {},
+          ...source ? { additionalInfo: { source: source.title } } : {},
           ...genres.length > 0 || tags.length > 0 ? {
             tags: [
               ...genres.length > 0 ? [App.createTagSection({ id: "genres", label: "Genres", tags: genres })] : [],
@@ -1847,39 +2160,67 @@ var _Sources = (() => {
         })
       });
     }
+    status(data) {
+      const value = `${data.upload_status ?? ""} ${data.publication_status ?? ""}`;
+      if (/completed/i.test(value)) {
+        return "Completed";
+      }
+      if (/abandoned/i.test(value)) {
+        return "Dropped";
+      }
+      if (/hiatus/i.test(value)) {
+        return "Hiatus";
+      }
+      return "Ongoing";
+    }
+    // The index lists every chapter in one payload as rows under a column list,
+    // which is how the site itself fills the chapter list.
     async getChapters(mangaId) {
-      const [data, taxonomy] = await Promise.all([
-        this.api.fetchJSON(`${API_URL}/series/${mangaId}`),
-        this.api.getTaxonomy().catch(() => ({ genres: [], sources: [] }))
-      ]);
-      const source = taxonomy.sources.find((entry) => entry.source_id === data.source_id);
-      const official = source?.source_type === "Official";
-      const books = data.series_books ?? [];
-      if (books.length === 0) {
+      const data = await this.api.fetchJSON(
+        `/series/${mangaId}/books/index?fields=List`
+      );
+      const columns = new Map(data.fields.map((name, index) => [name, index]));
+      const column = (row, name) => {
+        const index = columns.get(name);
+        return index === void 0 ? void 0 : row[index];
+      };
+      const rows = data.books ?? [];
+      if (rows.length === 0 || !columns.has("book_id")) {
         throw new Error(`No chapters were listed for ${mangaId}.`);
       }
-      const ordered = [...books].sort((left, right) => left.sort_no - right.sort_no);
-      return ordered.map((book, index) => {
-        const groupName = book.groups?.map((group) => group.title).join(", ") || source?.title || "";
-        const time = book.created_at ? new Date(book.created_at) : void 0;
-        const chapterNumber = Number(book.chapter_no);
-        const volume = Number(book.volume_no);
+      const groups = data.groups ?? [];
+      const books = rows.map((row) => ({
+        id: String(column(row, "book_id") ?? ""),
+        sortNo: Number(column(row, "sort_no")),
+        chapterNo: numberOrNaN(column(row, "chapter_no")),
+        volumeNo: numberOrNaN(column(row, "volume_no")),
+        title: String(column(row, "title") ?? "").trim(),
+        releasedAt: Number(column(row, "released_at")),
+        groupNames: (Array.isArray(column(row, "group_ix")) ? column(row, "group_ix") : []).map((index) => groups[index]?.title ?? "").filter(Boolean)
+      })).filter((book) => book.id).sort((left, right) => left.sortNo - right.sortNo);
+      return books.map((book, index) => {
+        const groupName = book.groupNames.join(", ");
+        const chapNum = Number.isFinite(book.chapterNo) ? book.chapterNo : book.sortNo;
+        const name = /^(ch\.?|chapter)\s*[\d.]+$/i.test(book.title) ? "" : book.title;
         return App.createChapter({
-          id: book.book_id,
-          chapNum: Number.isFinite(chapterNumber) ? chapterNumber : book.sort_no,
+          id: book.id,
+          chapNum,
           sortingIndex: index,
           langCode: "en",
-          ...book.title ? { name: book.title } : {},
-          ...Number.isFinite(volume) ? { volume } : {},
-          ...groupName ? { group: official ? `${groupName} \u2B50` : groupName } : {},
-          ...time && !isNaN(time.getTime()) ? { time } : {}
+          ...name ? { name } : {},
+          ...Number.isFinite(book.volumeNo) ? { volume: book.volumeNo } : {},
+          ...groupName ? { group: groupName } : {},
+          ...Number.isFinite(book.releasedAt) && book.releasedAt > 0 ? { time: new Date(book.releasedAt * 1e3) } : {}
         });
       });
     }
+    // Pages come from the CDN the challenge names, as JPEG on the plain "page"
+    // route; "page/original" would be JPEG XL, which the app cannot decode.
     async getChapterDetails(mangaId, chapterId) {
       const challenge = await this.api.challenge(chapterId);
+      const base = challenge.cache_url.replace(/\/+$/, "");
       const pages = [...challenge.manifest?.pages ?? []].sort((left, right) => left.page_no - right.page_no).map(
-        (page) => `${challenge.cache_url}/api/v2/books/page/${chapterId}/${page.page_id}.${page.ext ?? "jxl"}?token=${challenge.access_token}&is_datasaver=false`
+        (page) => `${base}/api/v2/books/page/${chapterId}/${page.page_id}.${page.ext ?? "jxl"}?token=${encodeURIComponent(challenge.access_token)}`
       );
       if (pages.length === 0) {
         throw new Error(`No pages were listed for ${chapterId}.`);
