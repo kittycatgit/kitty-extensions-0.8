@@ -31,22 +31,78 @@ const DOMAIN = "https://fanfox.net";
 const MOBILE_DOMAIN = "https://m.fanfox.net";
 
 // Every list URL below is slash-terminated or has a query: without that the site 301s to plain http, which iOS refuses.
-const HOME_SECTIONS = [
-  { id: "hot", title: "Hot Manga Releases", type: HomeSectionType.featured, more: true },
+// Every block of the site's home page, in the site's order. Text-only blocks (ranking, trending) have no covers on
+// the home page, so those rails are fed from their own listing pages; "Completed" is the directory's completed view.
+type HomeEntry = {
+  id: string;
+  title: string;
+  type: HomeSectionType;
+  heading?: string; // the block's heading on the home page
+  page?: (page: number) => string; // the listing page behind "more", if any
+  paged?: boolean;
+};
+const HOME_SECTIONS: HomeEntry[] = [
+  {
+    id: "hot",
+    title: "Hot Manga Releases",
+    type: HomeSectionType.featured,
+    heading: "Hot Manga Releases",
+    page: () => `${DOMAIN}/hot/`,
+  },
   {
     id: "reading",
     title: "Being Read Right Now",
     type: HomeSectionType.singleRowNormal,
-    more: false,
+    heading: "Being Read Right Now",
   },
-  { id: "new", title: "New Manga Release", type: HomeSectionType.singleRowNormal, more: true },
-  { id: "latest", title: "Latest Updates", type: HomeSectionType.singleRowLarge, more: true },
-] as const;
+  {
+    id: "ranking",
+    title: "Popular Manga Ranking",
+    type: HomeSectionType.singleRowNormal,
+    page: () => `${DOMAIN}/ranking/`,
+  },
+  {
+    id: "recommended",
+    title: "Recommended",
+    type: HomeSectionType.singleRowNormal,
+    heading: "Recommended",
+  },
+  {
+    id: "new",
+    title: "New Manga Release",
+    type: HomeSectionType.singleRowNormal,
+    heading: "New Manga Release",
+    page: (n) => (n > 1 ? `${DOMAIN}/directory/${n}.html?news` : `${DOMAIN}/directory/?news`),
+    paged: true,
+  },
+  {
+    id: "latest",
+    title: "Latest Updates",
+    type: HomeSectionType.singleRowLarge,
+    heading: "Updates",
+    page: (n) => (n > 1 ? `${DOMAIN}/releases/${n}.html` : `${DOMAIN}/releases/`),
+    paged: true,
+  },
+  {
+    id: "trending",
+    title: "Trending Manga",
+    type: HomeSectionType.singleRowNormal,
+    page: () => `${DOMAIN}/trending/`,
+  },
+  {
+    id: "completed",
+    title: "Completed",
+    type: HomeSectionType.singleRowNormal,
+    page: (n) =>
+      n > 1 ? `${DOMAIN}/directory/${n}.html?complete` : `${DOMAIN}/directory/?complete`,
+    paged: true,
+  },
+];
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 export const MangaFoxInfo: SourceInfo = {
-  version: "1.0.0",
+  version: "2.0.0",
   name: "MangaFox",
   icon: "icon.png",
   author: "kittycatgit",
@@ -177,7 +233,10 @@ export class MangaFox
     const tiles: PartialSourceManga[] = [];
     const seen = new Set<string>();
 
-    for (const element of $("ul.manga-list-1-list > li", root as string).toArray()) {
+    for (const element of $(
+      "ul.manga-list-1-list > li, ul.manga-list-3-list > li",
+      root as string,
+    ).toArray()) {
       const link = $('a[href^="/manga/"]', element).first();
       this.pushTile(tiles, seen, {
         mangaId: this.mangaIdOf(link.attr("href")),
@@ -236,68 +295,57 @@ export class MangaFox
 
   async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
     for (const entry of HOME_SECTIONS) {
-      sectionCallback(
-        App.createHomeSection({
-          id: entry.id,
-          title: entry.title,
-          type: entry.type,
-          containsMoreItems: entry.more,
-        }),
-      );
+      sectionCallback(this.section(entry));
     }
 
-    const $ = await this.fetch(`${DOMAIN}/`);
+    const home = this.fetch(`${DOMAIN}/`);
+    // Each rail fills on its own: one failing listing page must not take the others down with it.
+    await Promise.all(
+      HOME_SECTIONS.map(async (entry) => {
+        try {
+          const items = entry.heading
+            ? this.homeBlock(await home, entry)
+            : this.list1Tiles(await this.fetch(entry.page!(1)), undefined);
+          sectionCallback(this.section(entry, items));
+        } catch (e) {
+          console.log(`MangaFox: rail ${entry.id} failed: ${String(e)}`);
+        }
+      }),
+    );
+  }
 
-    for (const entry of HOME_SECTIONS) {
-      // The home page's own heading for the rail ("Lastest Updates" is the site's spelling).
-      const heading = entry.id === "latest" ? "Updates" : entry.title;
-      const block = $("div.manga-list-1, div.manga-list-4")
-        .filter((_, element) =>
-          $("div.manga-list-1-title, div.manga-list-4-title", element)
-            .first()
-            .text()
-            .includes(heading),
-        )
-        .first();
+  private section(entry: HomeEntry, items?: PartialSourceManga[]): HomeSection {
+    return App.createHomeSection({
+      id: entry.id,
+      title: entry.title,
+      type: entry.type,
+      containsMoreItems: !!entry.page,
+      ...(items ? { items } : {}),
+    });
+  }
 
-      sectionCallback(
-        App.createHomeSection({
-          id: entry.id,
-          title: entry.title,
-          type: entry.type,
-          containsMoreItems: entry.more,
-          items:
-            entry.id === "latest"
-              ? this.list4Tiles(this.cheerio.load($.html(block)))
-              : this.list1Tiles($, block),
-        }),
-      );
-    }
+  // The home page block with this heading ("Lastest Updates" is the site's spelling, so "Updates" matches it).
+  private homeBlock($: CheerioAPI, entry: HomeEntry): PartialSourceManga[] {
+    const block = $("div.manga-list-1, div.manga-list-3, div.manga-list-4")
+      .filter((_, element) =>
+        $("div.manga-list-1-title, div.manga-list-3-title, div.manga-list-4-title", element)
+          .first()
+          .text()
+          .includes(entry.heading!),
+      )
+      .first();
+    return entry.id === "latest"
+      ? this.list4Tiles(this.cheerio.load($.html(block)))
+      : this.list1Tiles($, block);
   }
 
   async getViewMoreItems(homepageSectionId: string, metadata: unknown): Promise<PagedResults> {
     const page = (metadata as { page?: number } | undefined)?.page ?? 1;
-
-    switch (homepageSectionId) {
-      case "hot": {
-        const $ = await this.fetch(`${DOMAIN}/hot/`);
-        return App.createPagedResults({ results: this.list1Tiles($, $.root()) });
-      }
-      case "new": {
-        const $ = await this.fetch(
-          page > 1 ? `${DOMAIN}/directory/${page}.html?news` : `${DOMAIN}/directory/?news`,
-        );
-        return this.paged(this.list1Tiles($, $.root()), $, page);
-      }
-      case "latest": {
-        const $ = await this.fetch(
-          page > 1 ? `${DOMAIN}/releases/${page}.html` : `${DOMAIN}/releases/`,
-        );
-        return this.paged(this.list4Tiles($), $, page);
-      }
-      default:
-        return App.createPagedResults({ results: [] });
-    }
+    const entry = HOME_SECTIONS.find((e) => e.id === homepageSectionId);
+    if (!entry?.page) return App.createPagedResults({ results: [] });
+    const $ = await this.fetch(entry.page(page));
+    const tiles = entry.id === "latest" ? this.list4Tiles($) : this.list1Tiles($, undefined);
+    return entry.paged ? this.paged(tiles, $, page) : App.createPagedResults({ results: tiles });
   }
 
   async getSearchTags(): Promise<TagSection[]> {

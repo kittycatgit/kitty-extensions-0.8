@@ -84,10 +84,14 @@ const HOME_SECTIONS = [
     title: TRENDING_SECTIONS[2]!.title,
     type: HomeSectionType.singleRowNormal,
   },
+  // The site's latest feed filtered by series type (the API's only other listing axis).
+  { id: "latest-manga", title: "Latest Manga", type: HomeSectionType.singleRowNormal },
+  { id: "latest-manhwa", title: "Latest Manhwa", type: HomeSectionType.singleRowNormal },
+  { id: "latest-manhua", title: "Latest Manhua", type: HomeSectionType.singleRowNormal },
 ];
 
 export const HiperDexInfo: SourceInfo = {
-  version: "1.0.0",
+  version: "2.0.0",
   name: "HiperDex",
   icon: "icon.png",
   author: "kittycatgit",
@@ -456,13 +460,17 @@ export class HiperDex
       sectionCallback(App.createHomeSection({ ...entry, containsMoreItems: true }));
     }
 
+    // Each rail fills on its own: one failing call must not take the others down with it.
     await Promise.all(
       HOME_SECTIONS.map(async (entry) => {
-        const page = await this.sectionPage(entry.id, 1);
-
-        sectionCallback(
-          App.createHomeSection({ ...entry, containsMoreItems: true, items: page.results }),
-        );
+        try {
+          const page = await this.sectionPage(entry.id, 1);
+          sectionCallback(
+            App.createHomeSection({ ...entry, containsMoreItems: true, items: page.results }),
+          );
+        } catch (e) {
+          console.log(`HiperDex: rail ${entry.id} failed: ${String(e)}`);
+        }
       }),
     );
   }
@@ -473,10 +481,13 @@ export class HiperDex
   }
 
   private async sectionPage(sectionId: string, page: number): Promise<PagedResults> {
+    const latestType = /^latest-(manga|manhwa|manhua)$/.exec(sectionId)?.[1];
     const results =
       sectionId === LATEST_SECTION_ID
         ? await this.latestUpdates(page)
-        : await this.trending(sectionId, page);
+        : latestType
+          ? await this.latestUpdates(page, latestType)
+          : await this.trending(sectionId, page);
 
     return App.createPagedResults({
       results,
@@ -508,12 +519,12 @@ export class HiperDex
     );
   }
 
-  private async latestUpdates(page: number): Promise<PartialSourceManga[]> {
+  private async latestUpdates(page: number, seriesType = "all"): Promise<PartialSourceManga[]> {
     const rows = await this.api.query<ApiLatestItem[]>("recommendations.latestChapters", {
       limit: LATEST_PAGE_SIZE,
       page,
       maxRating: MAX_RATING,
-      seriesType: "all",
+      seriesType,
     });
 
     const items: PartialSourceManga[] = [];
