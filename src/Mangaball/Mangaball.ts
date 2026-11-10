@@ -57,7 +57,7 @@ import {
 } from "./state";
 
 export const MangaballInfo: SourceInfo = {
-  version: "1.0.0",
+  version: "2.0.0",
   name: "Mangaball",
   icon: "icon.png",
   author: "kittycatgit",
@@ -530,7 +530,11 @@ function coverUrl(image: ApiImage | null | undefined): string {
   const path = image?.cover?.path?.trim();
 
   if (path) {
-    return /^https?:\/\//.test(path) ? path : `${COVER_CDN}${path.replace(/^\/+/, "")}`;
+    // A seventh of the catalogue stores this as a Windows path. A browser and
+    // Node fold the backslash to a slash; iOS sends it as %5C and the CDN 404s.
+    const normalised = path.replace(/\\/g, "/").replace(/^\/+/, "");
+
+    return /^https?:\/\//.test(path) ? path : `${COVER_CDN}${normalised}`;
   }
 
   for (const candidate of [
@@ -549,11 +553,21 @@ function coverUrl(image: ApiImage | null | undefined): string {
   return PLACEHOLDER_COVER;
 }
 
+// The field is markdown, which the site renders and the app does not, so the
+// markers would otherwise be read as part of the description.
 function synopsis(title: ApiTitle): string {
   const description = title.description;
   const text = Array.isArray(description) ? description.join("\n\n") : (description ?? "");
 
-  return text.replace(/<[^>]+>/g, "").trim();
+  return text
+    .replace(/<[^>]+>/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/\*([^*\n]+)\*/g, "$1")
+    .replace(/^\s*(?:_{3,}|-{3,}|\*{3,})\s*$/gm, "")
+    .replace(/^\s*[-*]\s+/gm, "• ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function status(value: string | null | undefined): string {
