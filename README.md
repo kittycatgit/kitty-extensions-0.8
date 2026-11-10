@@ -8,6 +8,7 @@ Paperback 0.8 extensions.
 - [HiperDex](https://hiperdex.tv)
 - [Kagane](https://kagane.to)
 - [manga3asq](https://3asq.online) — Arabic
+- [Mangaball](https://mangaball.com)
 - [MangaFox](https://fanfox.net)
 - [Rawkuma](https://rawkuma.net)
 - [WebtoonScan](https://webtoonscan.com)
