@@ -146,7 +146,7 @@ const STATUS_LABELS: Record<string, string> = {
 const MISSING_COVER = `${DOMAIN}/image/none.webp`;
 
 export const CoffeeMangaInfo: SourceInfo = {
-  version: "5.0.0",
+  version: "6.0.0",
   name: "CoffeeManga",
   icon: "icon.png",
   author: "kittycatgit",
