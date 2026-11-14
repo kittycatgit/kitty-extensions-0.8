@@ -81,9 +81,9 @@ const HOME_SECTIONS = [
   },
 ];
 
-export const MangaHubInfo: SourceInfo = {
-  version: "1.0.0",
-  name: "MangaHub",
+export const MangahubInfo: SourceInfo = {
+  version: "4.0.0",
+  name: "Mangahub",
   icon: "icon.png",
   author: "kittycatgit",
   authorWebsite: "https://github.com/kittycatgit",
@@ -97,7 +97,7 @@ export const MangaHubInfo: SourceInfo = {
     SourceIntents.CLOUDFLARE_BYPASS_REQUIRED,
 };
 
-export class MangaHub
+export class Mangahub
   implements
     ChapterProviding,
     SearchResultsProviding,
