@@ -26,9 +26,9 @@ import {
 } from "@paperback/types";
 
 import { ADULT_GENRES, GENRES } from "./genres";
+import { parseReaderCall, parseReaderPage } from "./reader";
 
 const DOMAIN = "https://fanfox.net";
-const MOBILE_DOMAIN = "https://m.fanfox.net";
 
 // Every list URL below is slash-terminated or has a query: without that the site 301s to plain http, which iOS refuses.
 // Every block of the site's home page, in the site's order. Text-only blocks (ranking, trending) have no covers on
@@ -102,7 +102,7 @@ const HOME_SECTIONS: HomeEntry[] = [
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 export const MangaFoxInfo: SourceInfo = {
-  version: "2.0.0",
+  version: "3.0.0",
   name: "MangaFox",
   icon: "icon.png",
   author: "kittycatgit",
@@ -128,7 +128,7 @@ export class MangaFox
   constructor(public cheerio: CheerioAPI) {}
 
   readonly requestManager: RequestManager = App.createRequestManager({
-    requestsPerSecond: 4,
+    requestsPerSecond: 10,
     requestTimeout: 20_000,
     interceptor: {
       // Mutated in place as well as returned: the image CDN answers 403 without a fanfox referer.
@@ -185,7 +185,7 @@ export class MangaFox
     return `${DOMAIN}/manga/${mangaId}/`;
   }
 
-  private async fetch(url: string): Promise<CheerioAPI> {
+  private async fetchText(url: string): Promise<string> {
     const response = await this.requestManager.schedule(
       App.createRequest({ url, method: "GET" }),
       1,
@@ -195,7 +195,11 @@ export class MangaFox
       throw new Error(`${url} answered ${response.status}.`);
     }
 
-    return this.cheerio.load(response.data ?? "");
+    return response.data ?? "";
+  }
+
+  private async fetch(url: string): Promise<CheerioAPI> {
+    return this.cheerio.load(await this.fetchText(url));
   }
 
   // Covers come as plain http or protocol-relative; the CDN serves https and the app refuses http.
@@ -494,28 +498,39 @@ export class MangaFox
     );
   }
 
-  // The mobile roll reader lists every page of the chapter in one document, where the desktop reader
-  // hands out pages one scripted request at a time.
+  // The desktop reader is the one that serves every title: the mobile one answers "licensed and not
+  // available" for a good part of the catalogue. Long-strip chapters carry their pages in the
+  // document; the others hand them out two per call.
   async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
-    const $ = await this.fetch(`${MOBILE_DOMAIN}/roll_manga/${mangaId}/${chapterId}/1.html`);
-    const pages: string[] = [];
+    const base = `${DOMAIN}/manga/${mangaId}/${chapterId}`;
+    const reader = parseReaderPage(await this.fetchText(`${base}/1.html`));
+    let pages = reader.pages;
 
-    for (const element of $("img[data-original]").toArray()) {
-      const src = this.https($(element).attr("data-original"));
-      if (/\/store\/manga\//.test(src) && !pages.includes(src)) {
-        pages.push(src);
+    if (!pages) {
+      if (!reader.chapterId || reader.count === 0) {
+        throw new Error(`No reader was found for ${mangaId}/${chapterId}.`);
       }
+
+      const calls: Promise<string[]>[] = [];
+      for (let page = 1; page <= reader.count; page += 2) {
+        calls.push(
+          this.fetchText(`${base}/chapterfun.ashx?cid=${reader.chapterId}&page=${page}&key=`).then(
+            parseReaderCall,
+          ),
+        );
+      }
+      pages = (await Promise.all(calls)).flat();
     }
 
-    if (pages.length === 0) {
-      const notice = $(".also-like .alsotitle").text().trim();
-      throw new Error(
-        notice
-          ? `${mangaId}/${chapterId}: ${notice}`
-          : `No pages were found for ${mangaId}/${chapterId}.`,
-      );
+    if (pages.length < 2 || pages.length !== reader.count) {
+      throw new Error(`${mangaId}/${chapterId} printed ${pages.length} of ${reader.count} pages.`);
     }
 
-    return App.createChapterDetails({ id: chapterId, mangaId, pages });
+    return App.createChapterDetails({
+      id: chapterId,
+      mangaId,
+      // The reader's last page is its end-of-chapter screen.
+      pages: pages.slice(0, -1).map((page) => this.https(page)),
+    });
   }
 }
